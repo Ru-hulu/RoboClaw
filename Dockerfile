@@ -31,10 +31,10 @@ RUN npm install && npm run build
 WORKDIR /app
 
 # Create config directory
-RUN mkdir -p /root/.nanobot
+RUN mkdir -p /root/.roboclaw
 
 # Gateway default port
 EXPOSE 18790
 
-ENTRYPOINT ["nanobot"]
+ENTRYPOINT ["roboclaw"]
 CMD ["status"]
