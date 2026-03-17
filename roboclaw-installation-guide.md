@@ -1,33 +1,6 @@
-# RoboClaw Embodied First-Run Checklist
+# RoboClaw Installation Guide
 
-这份文档是给第一次使用 RoboClaw 的用户的实际验证流程。
-
-目标不是一次性验证所有机器人能力，而是系统性检查这次 PR 引入的整条链路是否正常：
-
-- RoboClaw 能否完成首次初始化
-- RoboClaw 能否生成具身 workspace
-- RoboClaw 能否通过对话收集 setup 信息
-- RoboClaw 能否把 setup-specific 资产写到 `~/.roboclaw/workspace/embodied/`
-- RoboClaw 能否保持 framework 源码不被污染
-- 如果你已经有真实本体或仿真环境，RoboClaw 能否继续进入 `connect / calibrate / move / debug / reset`
-
-## 1. What This PR Should Make Work
-
-在开始之前，先明确这次验证到底在验什么。
-
-这次 PR 的重点不是“已经内置支持了所有机器人”，而是：
-
-1. RoboClaw 首次安装和初始化链路要能工作。
-2. RoboClaw 要能创建一套专门给具身接入使用的 workspace scaffold。
-3. RoboClaw 要遵守 workspace-first 规则：
-   - framework 协议层在仓库里
-   - 用户具体 setup 写到 `~/.roboclaw/workspace/embodied/`
-   - 不直接改 framework 源码
-4. RoboClaw 要能通过自然语言引导用户整理 setup 信息，进入后续本体验证流程。
-
-如果上面 4 点不成立，这个 PR 就不算真的 work。
-
-## 2. Prerequisites
+## 1. Prerequisites
 
 假设你是从零开始：
 
@@ -36,13 +9,7 @@ git clone https://github.com/MINT-SJTU/RoboClaw.git
 cd RoboClaw
 ```
 
-开始之前确认：
-
-- 你有一个可用的 Python 环境
-- 你能在当前 shell 里执行 `pip`
-- 如果你要验证真实本体，ROS2、本体驱动和设备连接已经单独准备好
-
-## 3. Step 1: Install RoboClaw
+## 2. Step 1: Install RoboClaw
 
 执行：
 
@@ -50,12 +17,7 @@ cd RoboClaw
 pip install -e ".[dev]"
 ```
 
-你要验证：
-
-- 安装过程没有报错
-- 安装完成后 `roboclaw` 命令可用
-
-可以直接检查：
+安装成功后，`roboclaw` 命令应该已经可用，可以直接检查：
 
 ```bash
 roboclaw --help
@@ -65,9 +27,7 @@ roboclaw --help
 
 - 能看到 `onboard`、`status`、`agent`、`provider` 等命令
 
-如果这一步失败，问题还在 Python 环境或依赖安装，先不要进入后面的具身验证。
-
-## 4. Step 2: Initialize RoboClaw
+## 3. Step 2: Initialize RoboClaw
 
 执行：
 
@@ -75,18 +35,10 @@ roboclaw --help
 roboclaw onboard
 ```
 
-这一步是第一次启动的关键检查点。
-
-你要验证：
-
-- RoboClaw 成功创建 `~/.roboclaw/config.json`
-- RoboClaw 成功创建 `~/.roboclaw/workspace/`
-- RoboClaw 成功创建具身相关 scaffold，而不是只生成通用文件
-
-建议直接检查：
+这一步应该创建 `~/.roboclaw/config.json`、`~/.roboclaw/workspace/` 和具身相关 scaffold，可以直接检查：
 
 ```bash
-find ~/.roboclaw -maxdepth 3 -type f | sort
+find ~/.roboclaw -maxdepth 4 -type f | sort
 ```
 
 至少应该看到这些文件：
@@ -107,9 +59,7 @@ find ~/.roboclaw -maxdepth 3 -type f | sort
 ~/.roboclaw/workspace/embodied/sensors/README.md
 ```
 
-如果这一步失败，这个 PR 最基础的 onboarding 能力就是不成立的。
-
-## 5. Step 3: Verify Status Output
+## 4. Step 3: Verify Status Output
 
 执行：
 
@@ -124,82 +74,135 @@ roboclaw status
 - 当前 `Model` 显示正常
 - provider 状态和你机器上的真实情况一致
 
-如果 `status` 都不正常，就说明初始化后的运行时状态还不稳定。
+## 5. Step 4: Configure the Model Provider
 
-## 6. Step 4: Make Sure the Model Path Works
+在验证 `roboclaw agent` 之前，先把模型 provider 配好。
 
-执行最小消息：
+先执行：
 
 ```bash
-roboclaw agent -m "hello"
+roboclaw status
 ```
 
-如果你还没有配置模型提供方，这一步可能失败。这是正常的，但错误必须可理解。
+看当前机器上哪些 provider 已经可用。
 
-如果需要 OAuth 登录，可以执行：
+常见情况有两类：
+
+### 5.1 OAuth provider
+
+如果你用的是 OAuth provider，可以直接登录。
+
+目前代码里已经实现了这两种：
 
 ```bash
 roboclaw provider login openai-codex
+roboclaw provider login github-copilot
 ```
 
-或者根据你的环境，直接编辑：
+### 5.2 API key provider
+
+如果你用的是 API key provider，就直接编辑：
 
 ```bash
 ~/.roboclaw/config.json
 ```
 
+把对应 provider 的 key 和默认 model 配好。
+
+常见的 API key provider 包括：
+
+- `openai`
+- `anthropic`
+- `openrouter`
+- `deepseek`
+- `gemini`
+- `zhipu`
+- `dashscope`
+- `moonshot`
+- `minimax`
+- `aihubmix`
+- `siliconflow`
+- `volcengine`
+- `azureOpenai`
+- `custom`
+- `vllm`
+
+配好以后，再执行一次：
+
+```bash
+roboclaw status
+```
+
 你要验证：
+
+- 当前 `Model` 显示正确
+- 你要用的 provider 已经不是 `not set`
+
+## 6. Step 5: Verify the Model Path
+
+现在执行一条最简单的消息，确认 RoboClaw 已经能正常对话：
+
+```bash
+roboclaw agent -m "hello"
+```
+
+你要检查：
 
 - agent 能启动
+- agent 能正常返回内容
 - 如果失败，错误能明确指向模型配置、provider、网络或权限问题
-- 配好 provider 后，再次执行 `roboclaw agent -m "hello"` 能正常返回
 
-到这里为止，RoboClaw 的基础启动链路才算真正打通。
+## 7. Step 6: Let RoboClaw Start the Robot Setup Flow
 
-## 7. Step 5: Verify the Workspace-First Rule
+确认基础对话正常后，就可以开始让 RoboClaw 带你做机器人接入。
 
-这一步是这次 PR 的核心。
+然后直接用自然语言告诉 RoboClaw 你的目标。
 
-RoboClaw 现在应该遵守：
-
-- framework 协议和代码在仓库里
-- 用户 setup-specific 文件在 `~/.roboclaw/workspace/embodied/`
-- RoboClaw 不应该把具身接入内容直接写回 framework 源码
-
-先看当前仓库是否干净：
+如果你接的是实机，可以这样说：
 
 ```bash
-git status --short
+roboclaw agent -m "我想接入一台真实机器人，请一步一步带我完成配置。"
 ```
 
-然后让 RoboClaw 进入具身 setup 引导。可以直接给它一个明确任务，例如：
+如果你已经知道是机械臂，也可以这样说：
 
 ```bash
-roboclaw agent -m "I want to set up a real robot in RoboClaw. Help me collect the required embodiment information first, then create the necessary setup files under ~/.roboclaw/workspace/embodied/. Do not modify the framework source code."
+roboclaw agent -m "我想接入一台真实机械臂，请告诉我需要准备哪些信息，并一步一步带我完成配置。"
 ```
 
-你要验证：
+如果你接的是仿真环境，可以这样说：
 
-- RoboClaw 会先收集缺失信息，而不是直接乱写
-- RoboClaw 会引用 `EMBODIED.md` 的规则
-- RoboClaw 把新文件写到 `~/.roboclaw/workspace/embodied/`
-- 仓库内 framework 源码不应该因此产生无关改动
+```bash
+roboclaw agent -m "我想接入一个机器人仿真环境，请一步一步带我完成配置。"
+```
 
-建议检查：
+这一步你要检查：
+
+- RoboClaw 能理解你是在做第一次机器人接入
+- RoboClaw 会主动问你缺少的信息
+- RoboClaw 的提问是面向普通用户的
+- RoboClaw 不要求你先理解内部代码结构
+
+如果它开始引导你填写设备信息、连接方式、传感器信息或运行环境，就说明这条流程开始工作了。
+
+继续这轮对话后，可以再检查一次：
 
 ```bash
 find ~/.roboclaw/workspace/embodied -maxdepth 3 -type f | sort
 git status --short
 ```
 
-预期结果：
+你要检查：
 
-- `~/.roboclaw/workspace/embodied/` 下出现新的 intake 或 setup 文件
-- 仓库里的协议层源码没有被 agent 直接改写
+- `~/.roboclaw/workspace/embodied/` 下面开始出现新的文件
+- RoboClaw 没有把这些接入内容直接写回仓库源码
 
-如果 agent 把 setup 写进了仓库源码，这个 PR 的核心边界就没有守住。
+理想状态是：
 
-## 8. Step 6: Verify That Embodied Assets Are Organized Correctly
+- 用户只描述自己的目标
+- RoboClaw 自己遵守 framework / workspace 的边界
+
+## 8. Step 7: Verify That Embodied Assets Are Organized Correctly
 
 你不需要一次性生成所有资产，但至少要验证路径语义是对的。
 
@@ -223,7 +226,7 @@ git status --short
 
 这一步的目标不是验证“内容已经完美”，而是验证“这条路径是可维护、可继续扩展的”。
 
-## 9. Step 7: If You Have a Real Robot or Simulator, Test the Embodied Flow
+## 9. Step 8: If You Have a Real Robot or Simulator, Test the Embodied Flow
 
 只有在你已经具备真实本体或仿真环境时，才进入这一段。
 

@@ -31,12 +31,14 @@ embodied/
 
 ## Generation Flow
 
-1. Discover the robot, sensors, ROS2 interfaces, and target backends.
-2. Write an intake note under `embodied/intake/`.
-3. Reuse built-in component manifests where possible.
-4. Generate setup-specific files under `embodied/assemblies`, `embodied/deployments`, `embodied/adapters`, and `embodied/simulators`.
-5. If a robot or sensor is local-only and not reusable enough for framework, define it under `embodied/robots` or `embodied/sensors`.
-6. Keep ids stable across later iterations so the same setup can be refined incrementally.
+1. As soon as the user identifies the robot class or model, write or update an intake note under `embodied/intake/` with the facts already known.
+2. Reuse built-in component manifests where possible.
+3. Default to the current RoboClaw integration path: `catalog -> runtime -> procedures -> adapters -> ROS2 -> embodiment`, unless the user explicitly asks for another path.
+4. Infer obvious facts from the framework, repo, local environment, or existing workspace assets before asking the user.
+5. Ask only for setup-specific facts that are still missing and are necessary for the next concrete step.
+6. Generate setup-specific files under `embodied/assemblies`, `embodied/deployments`, `embodied/adapters`, and `embodied/simulators`.
+7. If a robot or sensor is local-only and not reusable enough for framework, define it under `embodied/robots` or `embodied/sensors`.
+8. Keep ids stable across later iterations so the same setup can be refined incrementally.
 
 ## First-Run Objective
 
@@ -49,6 +51,22 @@ For a first-time user, the immediate success criteria are:
 5. complete a small safe `move`
 6. complete `debug`
 7. complete `reset`
+
+## First-Run Interaction Policy
+
+- The user should not need to understand internal terms such as framework code, workspace assets, adapters, ROS2 namespaces, topics, actions, or setup file layout.
+- When the user says something like "I want to install SO101" or "I want to connect a real robot arm", start intake immediately with the facts already known.
+- Do not block intake on all deployment details being present up front.
+- Prefer asking one small next-step question at a time, not a large questionnaire.
+- For known robots already represented in framework code, do not ask the user to choose between ROS2 and SDK first. Default to ROS2 unless the user explicitly says otherwise.
+- Defer low-level connection details such as serial device names, IPs, package paths, namespaces, and driver variants until they are actually needed for the next step.
+- Sensor questions are acceptable only when they affect the generated setup or the next procedure step.
+- The right first-run behavior is:
+  1. recognize the robot
+  2. create intake
+  3. reuse built-in definitions
+  4. ask only the smallest missing setup-specific question
+  5. continue refining the same setup
 
 ## Ownership Boundary
 
