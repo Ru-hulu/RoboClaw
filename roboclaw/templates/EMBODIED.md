@@ -31,6 +31,13 @@ where RoboClaw should write the active user's setup.
 - Defer serial devices, IPs, package paths, and driver variants until they are actually needed.
 - Only ask sensor questions when they affect the generated setup or the next procedure step.
 
+## ROS2 Missing Path
+
+- If the setup needs ROS2 and it is not installed or not initialized, read `embodied/guides/ROS2_INSTALL.md` from this workspace before proposing install steps.
+- Prefer supported Ubuntu binary installs over source builds for first-run setups.
+- Prefer executing the documented install steps directly when the user wants local setup help, instead of dumping a long tutorial onto the user.
+- Record the chosen ROS distro and install outcome in intake notes before continuing with deployment or adapter generation.
+
 ## Asset Rules
 
 - Put local-only robot manifests in `embodied/robots/` only when framework coverage is insufficient.

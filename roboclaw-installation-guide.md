@@ -230,6 +230,20 @@ git status --short
 
 只有在你已经具备真实本体或仿真环境时，才进入这一段。
 
+如果这一步里 RoboClaw 判断本机还没有 ROS2，不要让它临场自由发挥安装教程。  
+应当让它读取并遵循仓库里的这份文档：
+
+```text
+roboclaw/templates/embodied/guides/ROS2_INSTALL.md
+```
+
+目标是：
+
+- 优先走受支持的平台安装路径
+- 优先走 Ubuntu binary install，而不是一上来就 source build
+- 把安装结果和 ROS2 distro 记录进 intake / workspace
+- 安装完成后再继续 deployment / adapter 生成
+
 这里开始验证第一个版图的核心目标：
 
 - 连接

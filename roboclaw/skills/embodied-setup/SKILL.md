@@ -25,6 +25,7 @@ Use this skill when RoboClaw is helping a user create or refine a robot setup.
 6. Infer obvious facts from framework code, the local environment, and existing workspace files before asking the user.
 7. Ask only one small next-step question at a time.
 8. Keep ids stable so later turns refine the same setup.
+9. If ROS2 is missing or clearly not initialized, read `embodied/guides/ROS2_INSTALL.md` in the active workspace and follow that playbook instead of inventing ad-hoc install steps.
 
 ## What To Generate
 
@@ -46,3 +47,4 @@ Use `_templates/` as a scaffold, not as final content.
 - Do not ask for namespaces, topics, package paths, or device identifiers before they are needed.
 - Do not front-load a large questionnaire.
 - Do not put robot-specific defaults into this skill.
+- Do not freehand a ROS2 installation recipe from memory when the workspace guide already covers the user's platform.

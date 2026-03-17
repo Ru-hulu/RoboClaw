@@ -48,6 +48,7 @@ Key documents:
 
 - [Current embodied framework](./embodiment-ros2-architecture.md)
 - [Installation guide](./roboclaw-installation-guide.md)
+- [ROS2 install playbook for RoboClaw](./roboclaw/templates/embodied/guides/ROS2_INSTALL.md)
 
 The direction is clear, and we will continue making the process public as we move forward.
 

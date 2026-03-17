@@ -12,6 +12,7 @@ one machine, or one lab environment.
 - `deployments/`: site-specific ROS2 and device values
 - `adapters/`: setup-specific adapter bindings
 - `simulators/`: world and scenario files for local simulation
+- `guides/`: operator and agent playbooks for setup tasks such as ROS2 installation
 - `_templates/`: minimal scaffolds for generated Python assets
 
 ## Normal Generation Order
