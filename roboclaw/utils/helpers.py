@@ -90,10 +90,14 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
     def _sync_tree(root, rel_prefix: Path = Path()) -> None:
         for item in root.iterdir():
             rel = rel_prefix / item.name
+            if item.name == "__pycache__":
+                continue
             if item.is_dir():
                 _sync_tree(item, rel)
                 continue
             if rel.name == "__init__.py":
+                continue
+            if rel.suffix == ".pyc":
                 continue
             if rel == Path("memory/HISTORY.md"):
                 continue
