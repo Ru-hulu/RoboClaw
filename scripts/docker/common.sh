@@ -4,8 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 ROBOCLAW_DOCKER_HOME="${ROBOCLAW_DOCKER_HOME:-${HOME}/.roboclaw-docker}"
-DEFAULT_DOCKER_PROFILE="${ROBOCLAW_DOCKER_PROFILE:-ubuntu2404}"
-DEFAULT_MATRIX_PROFILES="${ROBOCLAW_DOCKER_MATRIX_PROFILES:-ubuntu2204,ubuntu2204-ros2,ubuntu2404,ubuntu2404-ros2}"
+DEFAULT_DOCKER_PROFILE="${ROBOCLAW_DOCKER_PROFILE:-ubuntu2404-ros2}"
+DEFAULT_MATRIX_PROFILES="${ROBOCLAW_DOCKER_MATRIX_PROFILES:-ubuntu2204-ros2,ubuntu2404-ros2}"
 
 die() {
   echo "error: $*" >&2
@@ -21,7 +21,7 @@ require_instance() {
 docker_profile() {
   local profile="${1:-${DEFAULT_DOCKER_PROFILE}}"
   case "${profile}" in
-    ubuntu2204|ubuntu2204-ros2|ubuntu2404|ubuntu2404-ros2)
+    ubuntu2204-ros2|ubuntu2404-ros2)
       printf '%s\n' "${profile}"
       ;;
     *)
@@ -34,10 +34,10 @@ docker_profile_base_image() {
   local profile
   profile="$(docker_profile "${1:-}")"
   case "${profile}" in
-    ubuntu2204|ubuntu2204-ros2)
+    ubuntu2204-ros2)
       printf '%s\n' "ubuntu:22.04"
       ;;
-    ubuntu2404|ubuntu2404-ros2)
+    ubuntu2404-ros2)
       printf '%s\n' "ubuntu:24.04"
       ;;
   esac
@@ -60,33 +60,17 @@ docker_profile_ros_distro() {
 }
 
 docker_profile_installs_ros2() {
-  local profile
-  profile="$(docker_profile "${1:-}")"
-  case "${profile}" in
-    *-ros2)
-      printf '%s\n' "1"
-      ;;
-    *)
-      printf '%s\n' "0"
-      ;;
-  esac
+  docker_profile "${1:-}" >/dev/null
+  printf '%s\n' "1"
 }
 
 docker_profile_stage1_python() {
-  local profile
-  profile="$(docker_profile "${1:-}")"
-  case "${profile}" in
-    *-ros2)
-      printf '%s\n' "/usr/bin/python3"
-      ;;
-    *)
-      printf '%s\n' "/usr/local/bin/python3"
-      ;;
-  esac
+  docker_profile "${1:-}" >/dev/null
+  printf '%s\n' "/usr/bin/python3"
 }
 
 list_docker_profiles() {
-  printf '%s\n' ubuntu2204 ubuntu2204-ros2 ubuntu2404 ubuntu2404-ros2
+  printf '%s\n' ubuntu2204-ros2 ubuntu2404-ros2
 }
 
 parse_profile_flag() {

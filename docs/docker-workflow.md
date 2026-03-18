@@ -20,12 +20,12 @@ Build an image for one instance:
 
 The build only runs when the Git worktree is clean. Image tags include the
 instance name and the current short commit hash, for example
-`roboclaw:devbox-ubuntu2404-10c41db`.
+`roboclaw:devbox-ubuntu2404-ros2-10c41db`.
 
 Build the same instance for multiple OS profiles from one command:
 
 ```bash
-./scripts/docker/matrix.sh build devbox --profiles ubuntu2204,ubuntu2204-ros2,ubuntu2404,ubuntu2404-ros2
+./scripts/docker/matrix.sh build devbox --profiles ubuntu2204-ros2,ubuntu2404-ros2
 ```
 
 Create or refresh the isolated instance state:
@@ -52,21 +52,19 @@ Run a one-shot RoboClaw task:
 Run the same task across the matrix from one command:
 
 ```bash
-./scripts/docker/matrix.sh run-task devbox --profiles ubuntu2204,ubuntu2204-ros2,ubuntu2404,ubuntu2404-ros2 -- status
-./scripts/docker/matrix.sh run-task devbox --profiles ubuntu2204,ubuntu2204-ros2,ubuntu2404,ubuntu2404-ros2 -- agent -m "Hello!" --no-markdown
+./scripts/docker/matrix.sh run-task devbox --profiles ubuntu2204-ros2,ubuntu2404-ros2 -- status
+./scripts/docker/matrix.sh run-task devbox --profiles ubuntu2204-ros2,ubuntu2404-ros2 -- agent -m "Hello!" --no-markdown
 ```
 
 Start long-lived dev containers for all matrix profiles:
 
 ```bash
-./scripts/docker/matrix.sh start-dev devbox --profiles ubuntu2204,ubuntu2204-ros2,ubuntu2404,ubuntu2404-ros2
+./scripts/docker/matrix.sh start-dev devbox --profiles ubuntu2204-ros2,ubuntu2404-ros2
 ```
 
 ## Profiles
 
-- `ubuntu2204`: `ubuntu:22.04` + Python 3.11
 - `ubuntu2204-ros2`: `ubuntu:22.04` + Python 3.11 + ROS2 Humble
-- `ubuntu2404`: `ubuntu:24.04` + Python 3.11
 - `ubuntu2404-ros2`: `ubuntu:24.04` + Python 3.11 + ROS2 Jazzy
 
 ## Networking and proxies

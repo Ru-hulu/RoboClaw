@@ -13,7 +13,7 @@ Usage:
   scripts/docker/matrix.sh start-dev <instance> [--profiles profile1,profile2]
   scripts/docker/matrix.sh run-task <instance> [--profiles profile1,profile2] -- <roboclaw args...>
 
-Default matrix profiles: ubuntu2204,ubuntu2204-ros2,ubuntu2404,ubuntu2404-ros2
+Default matrix profiles: ubuntu2204-ros2,ubuntu2404-ros2
 USAGE
 }
 
