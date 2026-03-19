@@ -113,6 +113,7 @@ async def test_onboarding_generates_ready_setup_for_so101_with_camera(tmp_path: 
         tmp_path,
         {
             "for link in /dev/serial/by-id/*": "/dev/serial/by-id/usb-so101 -> /dev/ttyACM0\n/dev/ttyACM0\n",
+            "ROBOCLAW_SO101_SERIAL_PROBE": "ROBOCLAW_SO101_SERIAL_PROBE resolved=/dev/ttyACM0 open=1 baud=1 result=0 error=0 value=2048\nROBOCLAW_SO101_SERIAL_OK\n",
             "command -v ros2": "ROS2_OK\nros2 0.0.0\nROS_DISTRO=jazzy\n",
         },
     )
@@ -162,6 +163,7 @@ async def test_onboarding_stops_at_ros2_prerequisite_gate(tmp_path: Path) -> Non
         tmp_path,
         {
             "for link in /dev/serial/by-id/*": "/dev/serial/by-id/usb-so101 -> /dev/ttyACM0\n/dev/ttyACM0\n",
+            "ROBOCLAW_SO101_SERIAL_PROBE": "ROBOCLAW_SO101_SERIAL_PROBE resolved=/dev/ttyACM0 open=1 baud=1 result=0 error=0 value=2048\nROBOCLAW_SO101_SERIAL_OK\n",
             "command -v ros2": "ROS2_MISSING\n",
         },
     )
@@ -239,6 +241,37 @@ async def test_onboarding_refuses_tty_only_device_nodes_without_by_id(tmp_path: 
     assert state["missing_facts"] == ["serial_device_by_id"]
     assert state["detected_facts"]["serial_device_unstable"] is True
     assert "stable `/dev/serial/by-id/...`" in response.content
+    assert not (tmp_path / "embodied" / "assemblies" / "so101_setup.py").exists()
+
+
+@pytest.mark.asyncio
+async def test_onboarding_blocks_unresponsive_so101_serial_device(tmp_path: Path) -> None:
+    _prepare_workspace(tmp_path)
+    tools, _ = _build_tools(
+        tmp_path,
+        {
+            "for link in /dev/serial/by-id/*": "/dev/serial/by-id/usb-so101 -> /dev/ttyACM0\n/dev/ttyACM0\n",
+            "ROBOCLAW_SO101_SERIAL_PROBE": "ROBOCLAW_SO101_SERIAL_PROBE resolved=/dev/ttyACM0 open=1 baud=1 result=-6 error=0 value=0\n[TxRxResult] There is no status packet!\n",
+            "command -v ros2": "ROS2_OK\nros2 0.0.0\nROS_DISTRO=jazzy\n",
+        },
+    )
+    controller = OnboardingController(tmp_path, tools)
+    session = Session(key="cli:direct")
+
+    await controller.handle_message(
+        InboundMessage(channel="cli", sender_id="user", chat_id="direct", content="SO101"),
+        session,
+    )
+    response = await controller.handle_message(
+        InboundMessage(channel="cli", sender_id="user", chat_id="direct", content="connected"),
+        session,
+    )
+
+    state = session.metadata[SETUP_STATE_KEY]
+    assert state["missing_facts"] == ["serial_device_by_id"]
+    assert state["detected_facts"]["serial_device_unresponsive"] is True
+    assert state["detected_facts"].get("serial_device_by_id") is None
+    assert "did not answer an SO101 servo probe" in response.content
     assert not (tmp_path / "embodied" / "assemblies" / "so101_setup.py").exists()
 
 

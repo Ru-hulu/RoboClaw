@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -368,6 +369,22 @@ class OnboardingController:
 
         if state.stage in (SetupStage.CONFIRM_CONNECTED, SetupStage.IDENTIFY_SETUP_SCOPE, SetupStage.PROBE_LOCAL_ENVIRONMENT):
             state = await self._probe_environment(state, on_progress=on_progress)
+            if state.detected_facts.get("serial_device_unresponsive") is True:
+                next_state = replace(
+                    state,
+                    stage=SetupStage.PROBE_LOCAL_ENVIRONMENT,
+                    status=SetupStatus.BOOTSTRAPPING,
+                    missing_facts=["serial_device_by_id"],
+                )
+                detail = state.detected_facts.get("serial_probe_error", "SO101 serial probe did not receive a status packet.")
+                return {
+                    "state": next_state,
+                    "content": (
+                        "I found a stable `/dev/serial/by-id/...` device, but it did not answer an SO101 servo probe."
+                        f"\nProbe result: `{detail}`."
+                        "\nConnect the actual SO101 controller or expose the correct stable by-id device, then reply again."
+                    ),
+                }
             if primary_profile is not None and primary_profile.auto_probe_serial and not state.detected_facts.get("serial_device_by_id"):
                 next_state = replace(
                     state,
@@ -554,8 +571,16 @@ class OnboardingController:
             )
             serial_by_id = self._select_serial_device_by_id(probe)
             if serial_by_id is not None:
-                facts["serial_device_by_id"] = serial_by_id
-                facts.pop("serial_device_unstable", None)
+                serial_check = await self._probe_so101_serial_device(serial_by_id, on_progress=on_progress)
+                if serial_check["ok"]:
+                    facts["serial_device_by_id"] = serial_by_id
+                    facts.pop("serial_device_unstable", None)
+                    facts.pop("serial_device_unresponsive", None)
+                    facts.pop("serial_probe_error", None)
+                else:
+                    facts.pop("serial_device_by_id", None)
+                    facts["serial_device_unresponsive"] = True
+                    facts["serial_probe_error"] = serial_check["detail"]
             else:
                 facts.pop("serial_device_by_id", None)
                 facts["serial_device_unstable"] = True
@@ -604,9 +629,57 @@ class OnboardingController:
         notes = list(state.notes)
         if facts.get("serial_device_by_id"):
             notes = self._extend_unique(notes, f"probe:serial={facts['serial_device_by_id']}")
+        if facts.get("serial_probe_error"):
+            notes = self._extend_unique(notes, f"probe:serial_check={facts['serial_probe_error']}")
         if facts.get("ros2_distro"):
             notes = self._extend_unique(notes, f"probe:ros2={facts['ros2_distro']}")
         return replace(state, stage=SetupStage.PROBE_LOCAL_ENVIRONMENT, detected_facts=facts, notes=notes)
+
+    async def _probe_so101_serial_device(
+        self,
+        serial_by_id: str,
+        *,
+        on_progress: Callable[..., Awaitable[None]] | None = None,
+    ) -> dict[str, str | bool]:
+        probe = await self._run_tool(
+            "exec",
+            {
+                "command": (
+                    "bash -lc 'PY_BIN=\"$(command -v python3 || command -v python || true)\"; "
+                    "if [ -z \"$PY_BIN\" ]; then printf \"ROBOCLAW_SO101_SERIAL_PYTHON_MISSING\\n\"; exit 0; fi; "
+                    "\"$PY_BIN\" - "
+                    f"{shlex.quote(serial_by_id)}"
+                    " <<\"PY\"\n"
+                    "from pathlib import Path\n"
+                    "import importlib.util\n"
+                    "import sys\n"
+                    "device = sys.argv[1]\n"
+                    "if importlib.util.find_spec(\"scservo_sdk\") is None:\n"
+                    "    print(\"ROBOCLAW_SO101_SERIAL_SDK_MISSING\")\n"
+                    "    raise SystemExit(0)\n"
+                    "import scservo_sdk as scs\n"
+                    "resolved = str(Path(device).resolve())\n"
+                    "port = scs.PortHandler(resolved)\n"
+                    "opened = port.openPort()\n"
+                    "baud_ok = port.setBaudRate(1000000)\n"
+                    "packet = scs.PacketHandler(0)\n"
+                    "value, result, error = packet.read2ByteTxRx(port, 6, 56)\n"
+                    "print(f\"ROBOCLAW_SO101_SERIAL_PROBE resolved={resolved} open={int(bool(opened))} baud={int(bool(baud_ok))} result={result} error={error} value={value}\")\n"
+                    "if result == getattr(scs, \"COMM_SUCCESS\", 0):\n"
+                    "    print(\"ROBOCLAW_SO101_SERIAL_OK\")\n"
+                    "else:\n"
+                    "    print(packet.getTxRxResult(result) or \"ROBOCLAW_SO101_SERIAL_NO_STATUS\")\n"
+                    "port.closePort()\n"
+                    "PY'"
+                )
+            },
+            on_progress=on_progress,
+        )
+        if "ROBOCLAW_SO101_SERIAL_OK" in probe:
+            return {"ok": True, "detail": ""}
+        lines = [line.strip() for line in probe.splitlines() if line.strip()]
+        detail = lines[-1] if lines else "SO101 serial probe failed"
+        return {"ok": False, "detail": detail}
 
     async def _read_ros2_guide(self, *, on_progress: Callable[..., Awaitable[None]] | None = None) -> str:
         guide_path = self.workspace / "embodied" / "guides" / "ROS2_INSTALL.md"
@@ -813,6 +886,8 @@ class OnboardingController:
             f"- connected: `{facts.get('connected', 'unknown')}`",
             f"- serial_device_by_id: `{facts.get('serial_device_by_id', 'unknown')}`",
             f"- serial_device_unstable: `{facts.get('serial_device_unstable', 'unknown')}`",
+            f"- serial_device_unresponsive: `{facts.get('serial_device_unresponsive', 'unknown')}`",
+            f"- serial_probe_error: `{facts.get('serial_probe_error', 'unknown')}`",
             f"- ros2_available: `{facts.get('ros2_available', 'unknown')}`",
             f"- ros2_distro: `{facts.get('ros2_distro', 'unknown')}`",
             f"- host_pretty_name: `{facts.get('host_pretty_name', 'unknown')}`",
