@@ -25,7 +25,6 @@ for key in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; do
   fi
 done
 
-export DOCKER_BUILDKIT=1
 docker build \
   --network=host \
   --build-arg "BASE_IMAGE=$(docker_profile_base_image "${PROFILE}")" \
