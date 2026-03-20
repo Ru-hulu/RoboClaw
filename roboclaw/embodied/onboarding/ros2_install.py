@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from roboclaw.embodied.localization import localize_text
+
 ROS2_START_PHRASES = (
     "start ros2 install",
     "install ros2",
@@ -12,12 +14,29 @@ ROS2_START_PHRASES = (
     "continue ros2 install",
     "begin ros2 install",
     "help me install ros2",
+    "start ros install",
+    "安装 ros2",
+    "开始安装 ros2",
+    "帮我安装 ros2",
+    "开始装 ros2",
+    "装 ros2",
 )
 
 ROS2_STEP_ADVANCE_PHRASES = (
     "done",
     "next",
     "step done",
+    "go on",
+    "finished",
+    "completed",
+    "okay next",
+    "好了",
+    "完成了",
+    "做完了",
+    "下一步",
+    "继续",
+    "这一步做完了",
+    "这步做完了",
 )
 
 
@@ -34,20 +53,39 @@ class ROS2InstallRecipe:
 
 def extract_ros2_state(content: str) -> bool | None:
     lower = content.lower()
-    if "ros2" not in lower:
+    if "ros2" not in lower and "ros 2" not in lower and "ros" not in lower:
         return None
-    if any(token in lower for token in ("missing", "not installed", "unavailable", "not available", "broken")):
+    if any(token in lower for token in (
+        "missing",
+        "not installed",
+        "unavailable",
+        "not available",
+        "broken",
+        "没装",
+        "没有安装",
+        "不可用",
+        "还不能用",
+    )):
         return False
-    if any(token in lower for token in ("ros2 installed", "installed ros2", "ros2 available", "available ros2")):
+    if any(token in lower for token in (
+        "ros2 installed",
+        "installed ros2",
+        "ros2 available",
+        "available ros2",
+        "ros2 已安装",
+        "ros2 装好了",
+        "ros2 可以用了",
+        "ros2 已经好了",
+    )):
         return True
     return None
 
 
 def extract_ros2_profile(content: str) -> str | None:
     lower = content.lower()
-    if any(token in lower for token in ("desktop", "rviz", "gui")):
+    if any(token in lower for token in ("desktop", "rviz", "gui", "桌面", "图形界面")):
         return "desktop"
-    if any(token in lower for token in ("headless", "ros-base", "base only")):
+    if any(token in lower for token in ("headless", "ros-base", "base only", "无头", "基础版")):
         return "ros-base"
     return None
 
@@ -155,28 +193,68 @@ def ros2_install_summary(recipe: ROS2InstallRecipe | None, facts: dict[str, Any]
     return f"`{host}`{wsl_suffix} -> ROS 2 {recipe.distro} ({profile})"
 
 
-def render_ros2_install_step(facts: dict[str, Any], recipe: ROS2InstallRecipe | None = None) -> str:
+def render_ros2_install_step(
+    facts: dict[str, Any],
+    recipe: ROS2InstallRecipe | None = None,
+    *,
+    language: str | None = None,
+) -> str:
     recipe = recipe or select_ros2_recipe(facts)
     if recipe is None:
-        return (
-            "I cannot guide a first-run ROS2 install on this host automatically."
-            "\nThe current guided path only supports Ubuntu 22.04 and Ubuntu 24.04, including Ubuntu inside WSL2."
+        return localize_text(
+            language,
+            en=(
+                "I cannot guide a first-run ROS2 install on this host automatically."
+                "\nThe current guided path only supports Ubuntu 22.04 and Ubuntu 24.04, including Ubuntu inside WSL2."
+            ),
+            zh=(
+                "我目前还不能在这台机器上自动引导首次 ROS2 安装。"
+                "\n当前的引导流程只支持 Ubuntu 22.04 和 Ubuntu 24.04，包括 WSL2 里的 Ubuntu。"
+            ),
         )
     step_index = int(facts.get("ros2_install_step_index", 0))
     step = recipe.steps[min(step_index, len(recipe.steps) - 1)]
     lines = [
-        f"I selected {ros2_install_summary(recipe, facts)}.",
-        f"Current step: `{min(step_index, len(recipe.steps) - 1) + 1}` of `{len(recipe.steps)}`.",
-        f"Step title: {step['title']}.",
+        localize_text(
+            language,
+            en=f"I selected {ros2_install_summary(recipe, facts)}.",
+            zh=f"我选择了 {ros2_install_summary(recipe, facts)}。",
+        ),
+        localize_text(
+            language,
+            en=f"Current step: `{min(step_index, len(recipe.steps) - 1) + 1}` of `{len(recipe.steps)}`.",
+            zh=f"当前步骤：第 `{min(step_index, len(recipe.steps) - 1) + 1}` / `{len(recipe.steps)}` 步。",
+        ),
+        localize_text(
+            language,
+            en=f"Step title: {step['title']}.",
+            zh=f"步骤标题：{step['title']}。",
+        ),
     ]
     if facts.get("host_has_sudo") is False:
-        lines.append("Warning: this host does not expose `sudo` in PATH, so the guided apt install cannot proceed until a privileged shell is available.")
+        lines.append(localize_text(
+            language,
+            en="Warning: this host does not expose `sudo` in PATH, so the guided apt install cannot proceed until a privileged shell is available.",
+            zh="警告：这台机器的 PATH 里没有 `sudo`，因此在有可提权 shell 之前，无法继续引导式 apt 安装。",
+        ))
     elif facts.get("host_passwordless_sudo") is False:
-        lines.append("Warning: this host needs an interactive sudo password. Run the commands below directly in your shell.")
+        lines.append(localize_text(
+            language,
+            en="Warning: this host needs an interactive sudo password. Run the commands below directly in your shell.",
+            zh="警告：这台机器需要交互式 sudo 密码。请直接在你的 shell 里执行下面的命令。",
+        ))
     if facts.get("host_is_wsl"):
-        lines.append("This looks like WSL2. Install ROS2 inside Ubuntu first, then attach the robot USB device from Windows.")
+        lines.append(localize_text(
+            language,
+            en="This looks like WSL2. Install ROS2 inside Ubuntu first, then attach the robot USB device from Windows.",
+            zh="这看起来是 WSL2。请先在 Ubuntu 里安装 ROS2，然后再从 Windows 侧把机器人 USB 设备挂进来。",
+        ))
     if str(facts.get("conda_prefix", "")):
-        lines.append("Conda is active. Prefer a clean shell for the official apt-based ROS2 install to avoid Python path conflicts.")
+        lines.append(localize_text(
+            language,
+            en="Conda is active. Prefer a clean shell for the official apt-based ROS2 install to avoid Python path conflicts.",
+            zh="当前 Conda 处于激活状态。为了避免 Python 路径冲突，建议用一个干净的 shell 来做官方 apt 方式的 ROS2 安装。",
+        ))
     lines.extend(
         [
             "```bash",
@@ -185,14 +263,31 @@ def render_ros2_install_step(facts: dict[str, Any], recipe: ROS2InstallRecipe | 
         ]
     )
     if step_index < len(recipe.steps) - 1:
-        lines.append("Reply with `done` when this step finishes and I will give you the next step.")
+        lines.append(localize_text(
+            language,
+            en="When this step finishes, tell me in natural language that you are done and I will give you the next step.",
+            zh="这一步完成后，直接自然地告诉我你做完了，我就给你下一步。",
+        ))
     else:
-        lines.append("Reply with `ROS2 installed` when this step finishes and I will validate the install before generating the setup assets.")
-    lines.append("If a command fails, paste the failing output and I will adjust the flow.")
+        lines.append(localize_text(
+            language,
+            en="When this step finishes, tell me that ROS2 is installed and I will validate the environment before generating the setup assets.",
+            zh="这一步完成后，直接告诉我 ROS2 已经装好了，我会先验证环境，再生成 setup 资产。",
+        ))
+    lines.append(localize_text(
+        language,
+        en="If a command fails, paste the failing output and I will adjust the flow.",
+        zh="如果有命令失败，把失败输出贴给我，我会调整这条流程。",
+    ))
     return "\n".join(lines)
 
 
-def render_ros2_shell_repair(facts: dict[str, Any], recipe: ROS2InstallRecipe | None = None) -> str:
+def render_ros2_shell_repair(
+    facts: dict[str, Any],
+    recipe: ROS2InstallRecipe | None = None,
+    *,
+    language: str | None = None,
+) -> str:
     recipe = recipe or select_ros2_recipe(facts)
     distro = str(
         facts.get("ros2_distro")
@@ -202,13 +297,28 @@ def render_ros2_shell_repair(facts: dict[str, Any], recipe: ROS2InstallRecipe | 
     shell_name = "zsh" if facts.get("host_shell") == "zsh" else "bash"
     shell_rc = "~/.zshrc" if shell_name == "zsh" else "~/.bashrc"
     if not distro:
-        return (
-            "RoboClaw found partial ROS2 installation state, but could not determine which distro to source."
-            "\nReply with the `/opt/ros/<distro>` path that should be used and I will continue from there."
+        return localize_text(
+            language,
+            en=(
+                "RoboClaw found partial ROS2 installation state, but could not determine which distro to source."
+                "\nTell me which `/opt/ros/<distro>` path should be used and I will continue from there."
+            ),
+            zh=(
+                "RoboClaw 发现这台机器上有部分 ROS2 安装状态，但还无法判断该 source 哪个 distro。"
+                "\n请告诉我应该使用哪个 `/opt/ros/<distro>` 路径，我会从那里继续。"
+            ),
         )
     lines = [
-        f"ROS2 packages are already present under `/opt/ros/{distro}`, but `ros2` is still unavailable in this shell.",
-        "Finish the shell setup below, open a fresh shell if needed, then reply with `ROS2 installed` so I can re-check.",
+        localize_text(
+            language,
+            en=f"ROS2 packages are already present under `/opt/ros/{distro}`, but `ros2` is still unavailable in this shell.",
+            zh=f"`/opt/ros/{distro}` 下已经有 ROS2 包了，但当前这个 shell 里仍然不能直接使用 `ros2`。",
+        ),
+        localize_text(
+            language,
+            en="Finish the shell setup below, open a fresh shell if needed, then tell me that ROS2 is installed so I can re-check.",
+            zh="先完成下面的 shell 配置；如果需要，打开一个新的 shell，然后告诉我 ROS2 已经装好，我会重新检查。",
+        ),
         "```bash",
         *_shell_init_commands(distro, shell_name, shell_rc),
         "```",

@@ -18,7 +18,15 @@ from roboclaw.bus.events import InboundMessage, OutboundMessage
 from roboclaw.embodied.catalog import build_default_catalog
 from roboclaw.embodied.execution.integration.adapters.ros2.profiles import get_ros2_profile
 from roboclaw.embodied.execution.integration.control_surfaces import ARM_HAND_CONTROL_SURFACE_PROFILE
-from roboclaw.embodied.onboarding.model import SETUP_STATE_KEY, SetupOnboardingState, SetupStage, SetupStatus
+from roboclaw.embodied.localization import choose_language, infer_language, localize_text
+from roboclaw.embodied.onboarding.model import (
+    PREFERRED_LANGUAGE_KEY,
+    SETUP_STATE_KEY,
+    OnboardingIntent,
+    SetupOnboardingState,
+    SetupStage,
+    SetupStatus,
+)
 from roboclaw.embodied.onboarding.ros2_install import (
     advance_ros2_install_step,
     extract_ros2_profile,
@@ -36,6 +44,8 @@ from roboclaw.config.paths import resolve_serial_by_id_path
 from roboclaw.session.manager import Session
 
 ProgressCallback = Callable[[str], Awaitable[None]]
+IntentParser = Callable[[Session, SetupOnboardingState, str], Awaitable[OnboardingIntent | None]]
+CalibrationStarter = Callable[..., Awaitable[Any]]
 SO101_SERIAL_PROBE_MODULE = "roboclaw.embodied.execution.integration.control_surfaces.ros2.scservo_probe"
 
 
@@ -54,10 +64,19 @@ class OnboardingController:
     )
     _SERIAL_RE = re.compile(r"(/dev/[^\s,;]+)")
 
-    def __init__(self, workspace: Path, tools: ToolRegistry):
+    def __init__(
+        self,
+        workspace: Path,
+        tools: ToolRegistry,
+        *,
+        intent_parser: IntentParser | None = None,
+        calibration_starter: CalibrationStarter | None = None,
+    ):
         self.workspace = workspace
         self.tools = tools
         self.catalog = build_default_catalog()
+        self.intent_parser = intent_parser
+        self.calibration_starter = calibration_starter
 
     def should_handle(self, session: Session, content: str) -> bool:
         state = self._load_state(session)
@@ -91,8 +110,23 @@ class OnboardingController:
         if state is None:
             state = self._new_state(msg.content)
 
-        state, changed = self._apply_user_input(state, msg.content)
-        response = await self._advance(state, msg.content, on_progress=on_progress)
+        intent = await self._resolve_intent(session, state, msg.content)
+        preferred_language = choose_language(
+            intent.preferred_language if intent is not None else None,
+            session.metadata.get(PREFERRED_LANGUAGE_KEY),
+            infer_language(msg.content),
+        )
+        session.metadata[PREFERRED_LANGUAGE_KEY] = preferred_language
+
+        state, changed = self._apply_user_input(state, msg.content, intent=intent)
+        response = await self._advance(
+            session,
+            state,
+            msg.content,
+            intent=intent,
+            preferred_language=preferred_language,
+            on_progress=on_progress,
+        )
 
         session.metadata[SETUP_STATE_KEY] = response["state"].to_dict()
         session.add_message("user", msg.content)
@@ -145,29 +179,100 @@ class OnboardingController:
         text = content.lower()
         return any(keyword in text for keyword in self._SETUP_EDIT_KEYWORDS)
 
-    def _apply_user_input(self, state: SetupOnboardingState, content: str) -> tuple[SetupOnboardingState, bool]:
+    async def _resolve_intent(
+        self,
+        session: Session,
+        state: SetupOnboardingState,
+        content: str,
+    ) -> OnboardingIntent:
+        heuristic = self._heuristic_intent(content)
+        if self.intent_parser is None or self._intent_has_signal(heuristic):
+            return heuristic
+        try:
+            parsed = await self.intent_parser(session, state, content)
+        except Exception:
+            logger.exception("Failed to parse onboarding intent for session {}", session.key)
+            parsed = None
+        return self._merge_intents(heuristic, parsed)
+
+    @staticmethod
+    def _intent_has_signal(intent: OnboardingIntent) -> bool:
+        return any(
+            (
+                intent.robot_ids,
+                intent.sensor_changes,
+                intent.connected is not None,
+                intent.serial_path,
+                intent.ros2_install_profile,
+                intent.ros2_state is not None,
+                intent.ros2_install_requested,
+                intent.ros2_step_advance,
+                intent.calibration_requested,
+            )
+        )
+
+    def _heuristic_intent(self, content: str) -> OnboardingIntent:
+        inferred_language = infer_language(content)
+        return OnboardingIntent(
+            robot_ids=tuple(self._extract_robot_ids(content)),
+            sensor_changes=tuple(self._extract_sensor_changes(content)),
+            connected=self._extract_connected_state(content),
+            serial_path=self._extract_serial_path(content),
+            ros2_install_profile=extract_ros2_profile(content),
+            ros2_state=extract_ros2_state(content),
+            ros2_install_requested=is_ros2_install_request(content),
+            ros2_step_advance=is_ros2_step_advance(content),
+            calibration_requested=self._extract_calibration_request(content),
+            preferred_language="zh" if inferred_language == "zh" else None,
+        )
+
+    @staticmethod
+    def _merge_intents(primary: OnboardingIntent, secondary: OnboardingIntent | None) -> OnboardingIntent:
+        if secondary is None:
+            return primary
+        return OnboardingIntent(
+            robot_ids=secondary.robot_ids or primary.robot_ids,
+            sensor_changes=secondary.sensor_changes or primary.sensor_changes,
+            connected=secondary.connected if secondary.connected is not None else primary.connected,
+            serial_path=secondary.serial_path or primary.serial_path,
+            ros2_install_profile=secondary.ros2_install_profile or primary.ros2_install_profile,
+            ros2_state=secondary.ros2_state if secondary.ros2_state is not None else primary.ros2_state,
+            ros2_install_requested=secondary.ros2_install_requested or primary.ros2_install_requested,
+            ros2_step_advance=secondary.ros2_step_advance or primary.ros2_step_advance,
+            calibration_requested=secondary.calibration_requested or primary.calibration_requested,
+            preferred_language=secondary.preferred_language or primary.preferred_language,
+        )
+
+    def _apply_user_input(
+        self,
+        state: SetupOnboardingState,
+        content: str,
+        *,
+        intent: OnboardingIntent | None = None,
+    ) -> tuple[SetupOnboardingState, bool]:
+        intent = intent or self._heuristic_intent(content)
         changed = False
         robots = list(state.robot_attachments)
         sensors = list(state.sensor_attachments)
         facts = dict(state.detected_facts)
 
-        for robot_id in self._extract_robot_ids(content):
+        for robot_id in intent.robot_ids:
             if not any(item["robot_id"] == robot_id for item in robots):
                 attachment_id = "primary" if not robots else f"robot_{len(robots) + 1}"
                 robots.append({"attachment_id": attachment_id, "robot_id": robot_id, "role": "primary" if not robots else "secondary"})
                 changed = True
 
-        sensor_changes = self._extract_sensor_changes(content)
+        sensor_changes = list(intent.sensor_changes)
         for sensor_change in sensor_changes:
             sensors, sensor_changed = self._apply_sensor_change(sensors, sensor_change)
             changed = changed or sensor_changed
 
-        connected = self._extract_connected_state(content)
+        connected = intent.connected
         if connected is not None and facts.get("connected") != connected:
             facts["connected"] = connected
             changed = True
 
-        serial_path = self._extract_serial_path(content)
+        serial_path = intent.serial_path
         if serial_path:
             serial_by_id = self._normalize_serial_device_by_id(serial_path)
             if serial_by_id is not None and facts.get("serial_device_by_id") != serial_by_id:
@@ -178,20 +283,23 @@ class OnboardingController:
                     self._set_unstable_serial_device(facts)
                     changed = True
 
-        ros2_profile = extract_ros2_profile(content)
+        ros2_profile = intent.ros2_install_profile
         if ros2_profile and facts.get("ros2_install_profile") != ros2_profile:
             facts["ros2_install_profile"] = ros2_profile
             changed = True
 
-        ros2_state = extract_ros2_state(content)
+        ros2_state = intent.ros2_state
         if ros2_state is False and facts.get("ros2_available") is not False:
             facts["ros2_available"] = False
             changed = True
         if ros2_state is True:
             facts["ros2_reported_installed"] = True
             changed = True
-        if is_ros2_install_request(content):
+        if intent.ros2_install_requested:
             facts["ros2_install_requested"] = True
+            changed = True
+        if intent.ros2_step_advance:
+            facts["ros2_step_advance_requested"] = True
             changed = True
 
         next_status = state.status
@@ -308,14 +416,33 @@ class OnboardingController:
 
     def _extract_connected_state(self, content: str) -> bool | None:
         lower = content.lower()
-        if any(token in lower for token in ("connected", "已连接", "连接好了", "连好了", "接好了", "接上了", "连上了", "都连好了")):
+        if any(token in lower for token in ("connected", "已连接", "连接好了", "连好了", "接好了", "接上了", "连上了", "都连好了", "已经接好了", "已经连接好了")):
             return True
         if (
             ("connect" in lower and any(token in lower for token in ("not", "no")))
-            or any(token in lower for token in ("没连", "没有连接", "未连接", "还没连", "没接好"))
+            or any(token in lower for token in ("没连", "没有连接", "未连接", "还没连", "没接好", "还没有接好", "还没有连接好"))
         ):
             return False
         return None
+
+    def _extract_calibration_request(self, content: str) -> bool:
+        lower = " ".join(content.lower().split())
+        return any(
+            token in lower
+            for token in (
+                "calibrate",
+                "calibration",
+                "start calibration",
+                "help me calibrate",
+                "need calibration",
+                "标定",
+                "校准",
+                "帮我标定",
+                "开始标定",
+                "帮我校准",
+                "开始校准",
+            )
+        )
 
     def _extract_serial_path(self, content: str) -> str | None:
         match = self._SERIAL_RE.search(content)
@@ -323,11 +450,16 @@ class OnboardingController:
 
     async def _advance(
         self,
+        session: Session,
         state: SetupOnboardingState,
         content: str,
         *,
+        intent: OnboardingIntent | None = None,
+        preferred_language: str | None = None,
         on_progress: Callable[..., Awaitable[None]] | None = None,
     ) -> dict[str, Any]:
+        intent = intent or self._heuristic_intent(content)
+        language = choose_language(preferred_language, infer_language(content))
         state = await self._write_intake(state, on_progress=on_progress)
         primary_profile = self._primary_profile(state)
 
@@ -340,10 +472,18 @@ class OnboardingController:
             )
             return {
                 "state": next_state,
-                "content": (
-                    "I will build this setup as an assembly-first onboarding flow."
-                    "\nFirst tell me which robots and sensors belong in this setup."
-                    "\nFor example: `SO101`, `SO101 + wrist camera`, or `dual arms + overhead camera`."
+                "content": localize_text(
+                    language,
+                    en=(
+                        "I will build this setup as an assembly-first onboarding flow."
+                        "\nFirst tell me which robots and sensors belong in this setup."
+                        "\nFor example: `SO101`, `SO101 + wrist camera`, or `dual arms + overhead camera`."
+                    ),
+                    zh=(
+                        "我会按 assembly-first 的接入流程来建立这个本体配置。"
+                        "\n先告诉我这个 setup 里包含哪些机器人和传感器。"
+                        "\n例如：`SO101`、`SO101 + wrist camera`，或 `双臂 + overhead camera`。"
+                    ),
                 ),
             }
 
@@ -357,10 +497,18 @@ class OnboardingController:
             )
             return {
                 "state": next_state,
-                "content": (
-                    f"RoboClaw does not have a framework ROS2 control surface profile for `{primary_robot_id}` yet."
-                    "\nThis onboarding flow will not generate a standard ROS2 deployment/adapter until that profile exists."
-                    "\nSwitch to a supported robot profile or add an embodiment-owned control surface profile first."
+                "content": localize_text(
+                    language,
+                    en=(
+                        f"RoboClaw does not have a framework ROS2 control surface profile for `{primary_robot_id}` yet."
+                        "\nThis onboarding flow will not generate a standard ROS2 deployment/adapter until that profile exists."
+                        "\nSwitch to a supported robot profile or add an embodiment-owned control surface profile first."
+                    ),
+                    zh=(
+                        f"RoboClaw 目前还没有 `{primary_robot_id}` 对应的框架级 ROS2 control surface profile。"
+                        "\n在这个 profile 存在之前，这条接入流程不会生成标准的 ROS2 deployment/adapter。"
+                        "\n请先切换到受支持的机器人 profile，或者补上该本体自己的 control surface profile。"
+                    ),
                 ),
             }
 
@@ -373,14 +521,102 @@ class OnboardingController:
             )
             return {
                 "state": next_state,
-                "content": (
-                    f"I recorded the current setup scope in intake: {self._component_summary(state)}."
-                    "\nNext I only need one minimal fact: are these devices already connected to this machine?"
-                    "\nReply with `connected` or `not connected`."
+                "content": localize_text(
+                    language,
+                    en=(
+                        f"I recorded the current setup scope in intake: {self._component_summary(state)}."
+                        "\nNext I only need one minimal fact: are these devices already connected to this machine?"
+                        "\nYou can answer naturally, for example: `connected`, `not connected`, `已经接好了`, or `还没连接`."
+                    ),
+                    zh=(
+                        f"我已经把当前 setup 范围记到 intake 里了：{self._component_summary(state)}。"
+                        "\n下一步我只需要一个最小必要信息：这些设备现在是否已经接到这台机器上？"
+                        "\n你可以自然回答，例如：`connected`、`not connected`、`已经接好了`，或者 `还没连接`。"
+                    ),
                 ),
             }
 
-        if state.stage in (SetupStage.CONFIRM_CONNECTED, SetupStage.IDENTIFY_SETUP_SCOPE, SetupStage.PROBE_LOCAL_ENVIRONMENT):
+        if state.stage == SetupStage.AWAIT_CALIBRATION:
+            state = self._refresh_calibration_facts(state)
+            if state.detected_facts.get("calibration_path"):
+                state, validation_error = self._validate_materialized_setup(state)
+                if validation_error is not None:
+                    return {"state": state, "content": validation_error}
+                ready_state = replace(
+                    state,
+                    stage=SetupStage.HANDOFF_READY,
+                    status=SetupStatus.READY,
+                    missing_facts=[],
+                )
+                return {
+                    "state": ready_state,
+                    "content": localize_text(
+                        language,
+                        en=(
+                            f"This setup is now ready: {self._component_summary(ready_state)}."
+                            "\nCalibration is available, and the setup assets have already been validated."
+                            "\nYou can continue with connect / calibrate / move / debug / reset."
+                            f"\nGenerated assets: {self._asset_summary(ready_state)}"
+                        ),
+                        zh=(
+                            f"这个 setup 现在已经就绪：{self._component_summary(ready_state)}。"
+                            "\n标定文件已经可用，而且 setup 资产也已经校验通过。"
+                            "\n你现在可以继续执行 connect / calibrate / move / debug / reset。"
+                            f"\n生成的资产：{self._asset_summary(ready_state)}"
+                        ),
+                    ),
+                }
+
+            state, validation_content = await self._materialize_for_calibration(state, on_progress=on_progress)
+            if validation_content is not None:
+                next_state = replace(
+                    state,
+                    stage=SetupStage.AWAIT_CALIBRATION,
+                    status=SetupStatus.BOOTSTRAPPING,
+                    missing_facts=["calibration_file"],
+                )
+                return {"state": next_state, "content": validation_content}
+
+            next_state = replace(
+                state,
+                stage=SetupStage.AWAIT_CALIBRATION,
+                status=SetupStatus.BOOTSTRAPPING,
+                missing_facts=["calibration_file"],
+            )
+            expected_path = primary_profile.canonical_calibration_path() if primary_profile is not None else None
+            if intent.calibration_requested and self.calibration_starter is not None:
+                started = await self.calibration_starter(
+                    session=session,
+                    action="calibrate",
+                    setup_id=state.setup_id,
+                    on_progress=on_progress,
+                )
+                latest_state = self._load_state(session) or next_state
+                return {"state": latest_state, "content": started.message}
+            return {
+                "state": next_state,
+                "content": localize_text(
+                    language,
+                    en=(
+                        f"This `{primary_profile.robot_id}` profile requires framework-managed calibration before execution."
+                        f"\nExpected canonical path: `{expected_path}`."
+                        "\nNo calibration file is available in this container instance yet."
+                        "\nTell me to start calibration in natural language, for example: `calibrate` or `help me calibrate`."
+                    ),
+                    zh=(
+                        f"这个 `{primary_profile.robot_id}` profile 在执行前需要 RoboClaw 管理的标定。"
+                        f"\n标准标定文件路径应为：`{expected_path}`。"
+                        "\n当前这个容器实例里还没有可用的标定文件。"
+                        "\n直接自然地告诉我开始标定即可，例如：`calibrate`、`帮我标定` 或 `开始校准`。"
+                    ),
+                ),
+            }
+
+        if state.stage in (
+            SetupStage.CONFIRM_CONNECTED,
+            SetupStage.IDENTIFY_SETUP_SCOPE,
+            SetupStage.PROBE_LOCAL_ENVIRONMENT,
+        ):
             state = await self._probe_environment(state, on_progress=on_progress)
             if state.detected_facts.get("serial_device_unresponsive") is True:
                 next_state = replace(
@@ -392,10 +628,18 @@ class OnboardingController:
                 detail = state.detected_facts.get("serial_probe_error", "SO101 serial probe did not receive a status packet.")
                 return {
                     "state": next_state,
-                    "content": (
-                        "I found a stable `/dev/serial/by-id/...` device, but it did not answer an SO101 servo probe."
-                        f"\nProbe result: `{detail}`."
-                        "\nConnect the actual SO101 controller or expose the correct stable by-id device, then reply again."
+                    "content": localize_text(
+                        language,
+                        en=(
+                            "I found a stable `/dev/serial/by-id/...` device, but it did not answer an SO101 servo probe."
+                            f"\nProbe result: `{detail}`."
+                            "\nConnect the actual SO101 controller or expose the correct stable by-id device, then reply again."
+                        ),
+                        zh=(
+                            "我找到了稳定的 `/dev/serial/by-id/...` 设备，但它没有回应 SO101 的舵机探测。"
+                            f"\n探测结果：`{detail}`。"
+                            "\n请接上真正的 SO101 控制器，或者暴露正确、稳定的 by-id 设备路径，然后再回复我。"
+                        ),
                     ),
                 }
             if primary_profile is not None and primary_profile.auto_probe_serial and not state.detected_facts.get("serial_device_by_id"):
@@ -407,9 +651,16 @@ class OnboardingController:
                 )
                 return {
                     "state": next_state,
-                    "content": (
-                        "I found a serial device, but I will not persist an unstable tty node."
-                        "\nPlease expose a stable `/dev/serial/by-id/...` mapping for the SO101 controller, then reply again."
+                    "content": localize_text(
+                        language,
+                        en=(
+                            "I found a serial device, but I will not persist an unstable tty node."
+                            "\nPlease expose a stable `/dev/serial/by-id/...` mapping for the SO101 controller, then reply again."
+                        ),
+                        zh=(
+                            "我找到了串口设备，但不会把不稳定的 tty 节点写进配置。"
+                            "\n请为 SO101 控制器提供稳定的 `/dev/serial/by-id/...` 映射，然后再回复我。"
+                        ),
                     ),
                 }
             if primary_profile is not None and primary_profile.requires_calibration:
@@ -417,20 +668,18 @@ class OnboardingController:
                 if not calibration_path:
                     next_state = replace(
                         state,
-                        stage=SetupStage.PROBE_LOCAL_ENVIRONMENT,
+                        stage=SetupStage.AWAIT_CALIBRATION,
                         status=SetupStatus.BOOTSTRAPPING,
                         missing_facts=["calibration_file"],
                     )
-                    expected_path = primary_profile.canonical_calibration_path()
-                    return {
-                        "state": next_state,
-                        "content": (
-                            f"This `{primary_profile.robot_id}` profile requires framework-managed calibration before execution."
-                            f"\nExpected canonical path: `{expected_path}`."
-                            "\nNo calibration file is available in this container instance yet."
-                            "\nReply with `calibrate` and I will guide the calibration step next."
-                        ),
-                    }
+                    return await self._advance(
+                        session,
+                        next_state,
+                        content,
+                        intent=intent,
+                        preferred_language=language,
+                        on_progress=on_progress,
+                    )
             if (
                 state.detected_facts.get("ros2_available") is not True
                 and state.detected_facts.get("ros2_installed_distros")
@@ -452,19 +701,38 @@ class OnboardingController:
                     missing_facts=["ros2_install"],
                 )
                 if state.detected_facts.get("ros2_installed_distros") and state.detected_facts.get("ros2_shell_initialized") is False:
-                    content = (
-                        "Local probing is complete. This setup needs ROS2, and RoboClaw found a partial install on this machine."
-                        f"\nI also read the workspace ROS2 install guide: {guide_summary}."
-                        f"\nSelected install path: {ros2_install_summary(recipe, state.detected_facts)}."
-                        f"\n{render_ros2_shell_repair(state.detected_facts, recipe)}"
+                    content = localize_text(
+                        language,
+                        en=(
+                            "Local probing is complete. This setup needs ROS2, and RoboClaw found a partial install on this machine."
+                            f"\nI also read the workspace ROS2 install guide: {guide_summary}."
+                            f"\nSelected install path: {ros2_install_summary(recipe, state.detected_facts)}."
+                            f"\n{render_ros2_shell_repair(state.detected_facts, recipe, language=language)}"
+                        ),
+                        zh=(
+                            "本地探测已经完成。这个 setup 需要 ROS2，而 RoboClaw 在这台机器上发现了部分安装。"
+                            f"\n我也已经读过工作区里的 ROS2 安装指南：{guide_summary}。"
+                            f"\n当前选择的安装路径：{ros2_install_summary(recipe, state.detected_facts)}。"
+                            f"\n{render_ros2_shell_repair(state.detected_facts, recipe, language=language)}"
+                        ),
                     )
                 else:
-                    content = (
-                        "Local probing is complete. This setup needs ROS2, but ROS2 is not available on this machine yet."
-                        f"\nI also read the workspace ROS2 install guide: {guide_summary}."
-                        f"\nSelected install path: {ros2_install_summary(recipe, state.detected_facts)}."
-                        "\nReply with `start ROS2 install` to let me prepare the RoboClaw-guided install flow."
-                        "\nIf you want GUI tools such as RViz, say `need desktop tools` before starting the install."
+                    content = localize_text(
+                        language,
+                        en=(
+                            "Local probing is complete. This setup needs ROS2, but ROS2 is not available on this machine yet."
+                            f"\nI also read the workspace ROS2 install guide: {guide_summary}."
+                            f"\nSelected install path: {ros2_install_summary(recipe, state.detected_facts)}."
+                            "\nTell me to start ROS2 install in natural language and I will prepare the guided flow."
+                            "\nIf you want GUI tools such as RViz, say `need desktop tools` before starting the install."
+                        ),
+                        zh=(
+                            "本地探测已经完成。这个 setup 需要 ROS2，但这台机器上目前还没有可用的 ROS2。"
+                            f"\n我也已经读过工作区里的 ROS2 安装指南：{guide_summary}。"
+                            f"\n当前选择的安装路径：{ros2_install_summary(recipe, state.detected_facts)}。"
+                            "\n直接自然地告诉我开始安装 ROS2，我就会准备 RoboClaw 引导的安装流程。"
+                            "\n如果你需要 RViz 之类的 GUI 工具，可以在开始安装前告诉我 `need desktop tools`。"
+                        ),
                     )
                 return {"state": next_state, "content": content}
 
@@ -490,13 +758,20 @@ class OnboardingController:
                     if state.detected_facts.get("ros2_installed_distros") and state.detected_facts.get("ros2_shell_initialized") is False:
                         return {
                             "state": state,
-                            "content": render_ros2_shell_repair(state.detected_facts),
+                            "content": render_ros2_shell_repair(state.detected_facts, language=language),
                         }
                     return {
                         "state": state,
-                        "content": (
-                            "I re-checked this machine after your update, but `ros2` is still not available in the shell yet."
-                            "\nContinue with the guided install steps, open a fresh shell if needed, then reply with `ROS2 installed`."
+                        "content": localize_text(
+                            language,
+                            en=(
+                                "I re-checked this machine after your update, but `ros2` is still not available in the shell yet."
+                                "\nContinue with the guided install steps, open a fresh shell if needed, then tell me that ROS2 is installed."
+                            ),
+                            zh=(
+                                "我在你更新之后重新检查了这台机器，但当前 shell 里还是还不能使用 `ros2`。"
+                                "\n请继续完成引导式安装步骤；如果需要，打开一个新的 shell，然后告诉我 ROS2 已经装好了。"
+                            ),
                         ),
                     }
 
@@ -505,22 +780,34 @@ class OnboardingController:
                 and state.detected_facts.get("ros2_install_requested")
                 and state.detected_facts.get("ros2_available") is not True
             ):
-                state, install_message = await self._prepare_ros2_install(state, on_progress=on_progress)
+                state, install_message = await self._prepare_ros2_install(
+                    state,
+                    language=language,
+                    on_progress=on_progress,
+                )
                 if install_message is not None:
                     return {"state": state, "content": install_message}
 
             if state.stage == SetupStage.VALIDATE_PREREQUISITES and state.detected_facts.get("ros2_available") is not True:
                 return {
                     "state": state,
-                    "content": (
-                        "The guided ROS2 install steps are complete."
-                        "\nFinish the commands in your shell, then reply with `ROS2 installed` and I will verify the environment before generating the setup assets."
+                    "content": localize_text(
+                        language,
+                        en=(
+                            "The guided ROS2 install steps are complete."
+                            "\nFinish the commands in your shell, then tell me that ROS2 is installed and I will verify the environment before generating the setup assets."
+                        ),
+                        zh=(
+                            "引导式 ROS2 安装步骤已经全部给完了。"
+                            "\n请先在你的 shell 里把命令执行完，然后告诉我 ROS2 已经装好了，我会在生成 setup 资产之前先验证环境。"
+                        ),
                     ),
                 }
 
             if state.stage == SetupStage.INSTALL_PREREQUISITES and state.detected_facts.get("ros2_available") is not True:
-                if is_ros2_step_advance(content):
+                if intent.ros2_step_advance or state.detected_facts.get("ros2_step_advance_requested"):
                     next_facts, should_validate = advance_ros2_install_step(state.detected_facts)
+                    next_facts.pop("ros2_step_advance_requested", None)
                     state = replace(
                         state,
                         stage=SetupStage.VALIDATE_PREREQUISITES if should_validate else SetupStage.INSTALL_PREREQUISITES,
@@ -529,19 +816,33 @@ class OnboardingController:
                 if state.stage == SetupStage.VALIDATE_PREREQUISITES:
                     return {
                         "state": state,
-                        "content": (
-                            "The guided ROS2 install steps are complete."
-                            "\nFinish the commands in your shell, then reply with `ROS2 installed` and I will verify the environment before generating the setup assets."
+                        "content": localize_text(
+                            language,
+                            en=(
+                                "The guided ROS2 install steps are complete."
+                                "\nFinish the commands in your shell, then tell me that ROS2 is installed and I will verify the environment before generating the setup assets."
+                            ),
+                            zh=(
+                                "引导式 ROS2 安装步骤已经全部给完了。"
+                                "\n请先在你的 shell 里把命令执行完，然后告诉我 ROS2 已经装好了，我会在生成 setup 资产之前先验证环境。"
+                            ),
                         ),
                     }
-                return {"state": state, "content": render_ros2_install_step(state.detected_facts)}
+                return {"state": state, "content": render_ros2_install_step(state.detected_facts, language=language)}
 
             if state.detected_facts.get("ros2_available") is not True:
                 return {
                     "state": state,
-                    "content": (
-                        "This setup is still waiting in the ROS2 prerequisite stage."
-                        "\nReply with `start ROS2 install` and I will prepare or run the guided install flow."
+                    "content": localize_text(
+                        language,
+                        en=(
+                            "This setup is still waiting in the ROS2 prerequisite stage."
+                            "\nTell me to start ROS2 install and I will prepare or run the guided install flow."
+                        ),
+                        zh=(
+                            "这个 setup 仍然停留在 ROS2 前置条件阶段。"
+                            "\n直接告诉我开始安装 ROS2，我就会继续准备或执行引导式安装流程。"
+                        ),
                     ),
                 }
             state = replace(state, stage=SetupStage.MATERIALIZE_ASSEMBLY, missing_facts=[])
@@ -564,18 +865,74 @@ class OnboardingController:
                 issues = "\n".join(f"- {issue.path}: {issue.message}" for issue in validation.issues[:5])
                 return {
                     "state": state,
-                    "content": f"The setup assets were written, but validation is still failing:\n{issues}",
+                    "content": localize_text(
+                        language,
+                        en=f"The setup assets were written, but validation is still failing:\n{issues}",
+                        zh=f"setup 资产已经写出，但校验仍然失败：\n{issues}",
+                    ),
                 }
             state = replace(state, stage=SetupStage.HANDOFF_READY, status=SetupStatus.READY)
 
         return {
             "state": state,
-            "content": (
-                f"This setup is now ready: {self._component_summary(state)}."
-                "\nI wrote the assembly, deployment, and adapter into the workspace. You can keep refining setup details in chat, or continue with connect / calibrate / move / debug / reset."
-                f"\nGenerated assets: {self._asset_summary(state)}"
+            "content": localize_text(
+                language,
+                en=(
+                    f"This setup is now ready: {self._component_summary(state)}."
+                    "\nI wrote the assembly, deployment, and adapter into the workspace. You can keep refining setup details in chat, or continue with connect / calibrate / move / debug / reset."
+                    f"\nGenerated assets: {self._asset_summary(state)}"
+                ),
+                zh=(
+                    f"这个 setup 现在已经就绪：{self._component_summary(state)}。"
+                    "\n我已经把 assembly、deployment 和 adapter 写入工作区。你可以继续在对话里细化 setup 细节，或者继续执行 connect / calibrate / move / debug / reset。"
+                    f"\n生成的资产：{self._asset_summary(state)}"
+                ),
             ),
         }
+
+    async def _materialize_for_calibration(
+        self,
+        state: SetupOnboardingState,
+        *,
+        on_progress: Callable[..., Awaitable[None]] | None = None,
+    ) -> tuple[SetupOnboardingState, str | None]:
+        """Write setup assets early so execution can resolve the setup for calibration."""
+        state = await self._write_assembly(state, on_progress=on_progress)
+        state = await self._write_deployment(state, on_progress=on_progress)
+        state = await self._write_adapter(state, on_progress=on_progress)
+        return self._validate_materialized_setup(state)
+
+    def _validate_materialized_setup(
+        self,
+        state: SetupOnboardingState,
+    ) -> tuple[SetupOnboardingState, str | None]:
+        """Validate already-written setup assets for handoff into execution."""
+        validation = inspect_workspace_assets(
+            self.workspace,
+            options=WorkspaceInspectOptions(lint_profile=WorkspaceLintProfile.BASIC),
+        )
+        if validation.has_errors:
+            issues = "\n".join(f"- {issue.path}: {issue.message}" for issue in validation.issues[:5])
+            return (
+                state,
+                "The setup assets were written for calibration handoff, but validation is still failing:\n"
+                f"{issues}",
+            )
+        return state, None
+
+    def _refresh_calibration_facts(self, state: SetupOnboardingState) -> SetupOnboardingState:
+        facts = dict(state.detected_facts)
+        primary_profile = self._primary_profile(state)
+        if primary_profile is None or not getattr(primary_profile, "requires_calibration", False):
+            return state
+        calibration_path = primary_profile.ensure_canonical_calibration()
+        if calibration_path is not None and calibration_path.exists():
+            facts["calibration_path"] = str(calibration_path)
+            facts.pop("calibration_missing", None)
+        else:
+            facts.pop("calibration_path", None)
+            facts["calibration_missing"] = True
+        return replace(state, detected_facts=facts)
 
     async def _probe_environment(
         self,
@@ -754,6 +1111,7 @@ class OnboardingController:
         self,
         state: SetupOnboardingState,
         *,
+        language: str | None = None,
         on_progress: Callable[..., Awaitable[None]] | None = None,
     ) -> tuple[SetupOnboardingState, str | None]:
         state = await self._probe_install_host(state, on_progress=on_progress)
@@ -764,10 +1122,18 @@ class OnboardingController:
                 stage=SetupStage.RESOLVE_PREREQUISITES,
                 missing_facts=["supported_ros2_host"],
             )
-            return next_state, (
-                "RoboClaw does not have a safe first-run ROS2 install recipe for this host yet."
-                f"\nDetected host: `{state.detected_facts.get('host_pretty_name', 'unknown')}`."
-                "\nThe current guided path supports Ubuntu 22.04/24.04 and WSL2 Ubuntu."
+            return next_state, localize_text(
+                language,
+                en=(
+                    "RoboClaw does not have a safe first-run ROS2 install recipe for this host yet."
+                    f"\nDetected host: `{state.detected_facts.get('host_pretty_name', 'unknown')}`."
+                    "\nThe current guided path supports Ubuntu 22.04/24.04 and WSL2 Ubuntu."
+                ),
+                zh=(
+                    "RoboClaw 目前还没有为这台机器提供安全的首次 ROS2 安装配方。"
+                    f"\n检测到的宿主机：`{state.detected_facts.get('host_pretty_name', 'unknown')}`。"
+                    "\n当前引导流程支持 Ubuntu 22.04/24.04，以及 WSL2 里的 Ubuntu。"
+                ),
             )
         facts = dict(state.detected_facts)
         facts["ros2_install_recipe"] = recipe.distro
@@ -782,7 +1148,7 @@ class OnboardingController:
             missing_facts=["guided_ros2_install"],
             detected_facts=facts,
         )
-        return next_state, render_ros2_install_step(next_state.detected_facts, recipe)
+        return next_state, render_ros2_install_step(next_state.detected_facts, recipe, language=language)
 
     async def _write_intake(
         self,

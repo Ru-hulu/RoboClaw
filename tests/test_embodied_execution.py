@@ -26,7 +26,11 @@ from roboclaw.embodied.execution.integration.control_surfaces.ros2.so101_feetech
     So101CalibrationMonitor,
 )
 from roboclaw.embodied.execution.orchestration.procedures.model import ProcedureKind
-from roboclaw.embodied.execution.orchestration.runtime.executor import ProcedureExecutionResult, ProcedureExecutor
+from roboclaw.embodied.execution.orchestration.runtime.executor import (
+    ProcedureExecutionResult,
+    ProcedureExecutor,
+    So101CalibrationFlow,
+)
 from roboclaw.embodied.execution.orchestration.runtime.manager import RuntimeManager
 from roboclaw.embodied.execution.orchestration.runtime.model import RuntimeStatus
 from roboclaw.embodied.onboarding import (
@@ -380,6 +384,21 @@ def _standard_ros2_responses(setup_id: str) -> dict[str, str]:
     }
 
 
+def _standard_onboarding_and_ros2_responses(setup_id: str) -> dict[str, str]:
+    responses = _standard_ros2_responses(setup_id)
+    responses.update(
+        {
+            "for link in /dev/serial/by-id/*": "/dev/serial/by-id/usb-so101 -> /dev/ttyACM0\n/dev/ttyACM0\n",
+            "roboclaw.embodied.execution.integration.control_surfaces.ros2.scservo_probe": (
+                "ROBOCLAW_SO101_SERIAL_PROBE resolved=/dev/ttyACM0 open=1 baud=1 result=0 error=0 value=2048\n"
+                "ROBOCLAW_SO101_SERIAL_OK\n"
+            ),
+            "command -v ros2": "ROS2_OK\nros2 0.0.0\nROS_DISTRO=jazzy\n",
+        }
+    )
+    return responses
+
+
 @pytest.mark.asyncio
 async def test_ready_session_routes_embodied_commands_without_provider(tmp_path: Path) -> None:
     _prepare_workspace(tmp_path)
@@ -393,7 +412,11 @@ async def test_ready_session_routes_embodied_commands_without_provider(tmp_path:
             LLMResponse(content="Opened."),
         ]
     )
-    loop, provider, fake_exec = _build_loop(tmp_path, _standard_ros2_responses("so101_setup"), provider=provider)
+    loop, provider, fake_exec = _build_loop(
+        tmp_path,
+        _standard_onboarding_and_ros2_responses("so101_setup"),
+        provider=provider,
+    )
     session = _seed_session(loop)
 
     response = await loop.process_direct("打开夹爪", session_key=session.key)
@@ -431,7 +454,11 @@ async def test_chinese_aliases_normalize_to_expected_primitives(
             LLMResponse(content="Done."),
         ]
     )
-    loop, provider, fake_exec = _build_loop(tmp_path, _standard_ros2_responses("so101_setup"), provider=provider)
+    loop, provider, fake_exec = _build_loop(
+        tmp_path,
+        _standard_onboarding_and_ros2_responses("so101_setup"),
+        provider=provider,
+    )
     session = _seed_session(loop)
 
     await loop.process_direct(message, session_key=session.key)
@@ -452,7 +479,11 @@ async def test_runtime_session_is_reused_across_multiple_commands(tmp_path: Path
             LLMResponse(content="Closed."),
         ]
     )
-    loop, provider, fake_exec = _build_loop(tmp_path, _standard_ros2_responses("so101_setup"), provider=provider)
+    loop, provider, fake_exec = _build_loop(
+        tmp_path,
+        _standard_onboarding_and_ros2_responses("so101_setup"),
+        provider=provider,
+    )
     session = _seed_session(loop)
 
     await loop.process_direct("打开夹爪", session_key=session.key)
@@ -550,7 +581,8 @@ async def test_direct_control_without_ready_setup_routes_into_onboarding(tmp_pat
 
     response = await loop.process_direct("打开夹爪", session_key="cli:first_time")
 
-    assert provider.chat_calls == 0
+    assert provider.chat_calls == 1
+    assert provider.tools[0] == []
     session = loop.sessions.get_or_create("cli:first_time")
     assert SETUP_STATE_KEY in session.metadata
     assert any(token in response.lower() for token in ("robot", "setup", "so101", "connect", "机器人"))
@@ -741,6 +773,7 @@ def _execution_context(
     *,
     calibration_exists: bool,
     runtime_status: RuntimeStatus = RuntimeStatus.DISCONNECTED,
+    preferred_language: str = "en",
 ):
     calibration_path = tmp_path / "scenario-calibration" / "so101" / "so101_real.json"
     calibration_path.parent.mkdir(parents=True, exist_ok=True)
@@ -775,6 +808,7 @@ def _execution_context(
             canonical_calibration_path=lambda: calibration_path,
         ),
         runtime=runtime,
+        preferred_language=preferred_language,
     )
     return executor, context, calibration_path
 
@@ -788,8 +822,23 @@ async def test_first_move_requires_calibration_before_connect(tmp_path: Path) ->
     assert result.ok is False
     assert "needs calibration before `connect` or motion" in result.message
     assert str(calibration_path) in result.message
-    assert "Reply with `calibrate`" in result.message
+    assert "Tell me to calibrate" in result.message
     assert context.runtime.status == RuntimeStatus.ERROR
+
+
+@pytest.mark.asyncio
+async def test_first_move_requires_calibration_before_connect_in_chinese(tmp_path: Path) -> None:
+    executor, context, calibration_path = _execution_context(
+        tmp_path,
+        calibration_exists=False,
+        preferred_language="zh",
+    )
+
+    result = await executor.execute_move(context, primitive_name="gripper_close")
+
+    assert result.ok is False
+    assert "需要先标定" in result.message
+    assert str(calibration_path) in result.message
 
 
 @pytest.mark.asyncio
@@ -1013,8 +1062,8 @@ async def test_calibration_start_failure_returns_friendly_retry_guidance(
     assert prompt.ok is False
     assert started.ok is False
     assert "the arm did not answer" in started.message
-    assert "reply `calibrate` again" in started.message
-    assert "reply `connect`" in started.message
+    assert "start calibration again" in started.message
+    assert "reconnect it first" in started.message
     assert "There is no status packet" not in started.message
     assert started.details["raw_error"] == "read 0x38 for servo 1 failed: [TxRxResult] There is no status packet!"
     assert executor.calibration_phase(context.runtime.id) is None
@@ -1075,8 +1124,203 @@ async def test_pending_calibration_blank_message_advances_without_provider(tmp_p
         )
 
     monkeypatch.setattr(loop.embodied_execution.executor, "advance_calibration", fake_advance)
+    loop.embodied_execution.executor._so101_calibration_flows[runtime_id] = So101CalibrationFlow(
+        monitor=object(),
+        calibration_path=tmp_path / "calibration" / "so101" / "so101_real.json",
+        phase="await_mid_pose_ack",
+        interval_s=0.1,
+        heartbeat_s=1.0,
+        sample_limit=None,
+        stop_event=asyncio.Event(),
+        overwrite_existing=False,
+    )
 
     response = await loop.process_direct("", session_key=session.key)
 
     assert provider.chat_calls == 0
     assert response == "started live calibration"
+
+
+@pytest.mark.asyncio
+async def test_pending_calibration_intercept_wins_over_active_onboarding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _prepare_workspace(tmp_path)
+    _write_setup_assets(tmp_path, "so101_setup")
+    loop, provider, _ = _build_loop(tmp_path, _standard_ros2_responses("so101_setup"))
+    session = Session(key="cli:calibration")
+    session.metadata[SETUP_STATE_KEY] = SetupOnboardingState(
+        setup_id="so101_setup",
+        intake_slug="so101_setup",
+        assembly_id="so101_setup",
+        deployment_id="so101_setup_real_local",
+        adapter_id="so101_setup_ros2_local",
+        stage=SetupStage.AWAIT_CALIBRATION,
+        status=SetupStatus.BOOTSTRAPPING,
+        robot_attachments=[{"attachment_id": "primary", "robot_id": "so101", "role": "primary"}],
+        execution_targets=[{"id": "real", "carrier": "real"}],
+        detected_facts={"connected": True, "ros2_available": True, "calibration_missing": True},
+        missing_facts=["calibration_file"],
+    ).to_dict()
+    session.metadata["embodied_calibration"] = {
+        "setup_id": "so101_setup",
+        "runtime_id": f"{session.key}:so101_setup",
+        "phase": "await_mid_pose_ack",
+    }
+    loop.sessions.save(session)
+
+    async def fake_advance(context, on_progress=None):
+        return ProcedureExecutionResult(
+            procedure=ProcedureKind.CALIBRATE,
+            ok=False,
+            message="started via pending calibration",
+            details={"calibration_phase": "streaming"},
+        )
+
+    monkeypatch.setattr(loop.embodied_execution.executor, "advance_calibration", fake_advance)
+    runtime_id = f"{session.key}:so101_setup"
+    loop.embodied_execution.executor._so101_calibration_flows[runtime_id] = So101CalibrationFlow(
+        monitor=object(),
+        calibration_path=tmp_path / "calibration" / "so101" / "so101_real.json",
+        phase="await_mid_pose_ack",
+        interval_s=0.1,
+        heartbeat_s=1.0,
+        sample_limit=None,
+        stop_event=asyncio.Event(),
+        overwrite_existing=False,
+    )
+
+    response = await loop.process_direct("", session_key=session.key)
+
+    assert response == "started via pending calibration"
+    assert provider.chat_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_stale_pending_calibration_metadata_is_cleared_and_restart_is_required(tmp_path: Path) -> None:
+    _prepare_workspace(tmp_path)
+    _write_setup_assets(tmp_path, "so101_setup")
+    loop, provider, _ = _build_loop(tmp_path, _standard_ros2_responses("so101_setup"))
+    session = Session(key="cli:stale-calibration")
+    session.metadata[SETUP_STATE_KEY] = SetupOnboardingState(
+        setup_id="so101_setup",
+        intake_slug="so101_setup",
+        assembly_id="so101_setup",
+        deployment_id="so101_setup_real_local",
+        adapter_id="so101_setup_ros2_local",
+        stage=SetupStage.AWAIT_CALIBRATION,
+        status=SetupStatus.BOOTSTRAPPING,
+        robot_attachments=[{"attachment_id": "primary", "robot_id": "so101", "role": "primary"}],
+        execution_targets=[{"id": "real", "carrier": "real"}],
+        detected_facts={"connected": True, "calibration_missing": True},
+        missing_facts=["calibration_file"],
+    ).to_dict()
+    session.metadata["embodied_calibration"] = {
+        "setup_id": "so101_setup",
+        "runtime_id": f"{session.key}:so101_setup",
+        "phase": "streaming",
+    }
+    loop.sessions.save(session)
+
+    response = await loop.process_direct("", session_key=session.key)
+
+    assert provider.chat_calls == 0
+    assert "expired" in response.lower() or "失效" in response
+    assert "embodied_calibration" not in session.metadata
+
+
+@pytest.mark.asyncio
+async def test_successful_calibration_marks_onboarding_ready_and_clears_pending_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _prepare_workspace(tmp_path)
+    _write_setup_assets(tmp_path, "so101_setup")
+    loop, _, _ = _build_loop(tmp_path, _standard_ros2_responses("so101_setup"))
+    session = Session(key="cli:calibration-success")
+    calibration_path = tmp_path / "config.json"
+    canonical_path = calibration_path.parent / "calibration" / "so101" / "so101_real.json"
+    canonical_path.unlink()
+    session.metadata[SETUP_STATE_KEY] = SetupOnboardingState(
+        setup_id="so101_setup",
+        intake_slug="so101_setup",
+        assembly_id="so101_setup",
+        deployment_id="so101_setup_real_local",
+        adapter_id="so101_setup_ros2_local",
+        stage=SetupStage.AWAIT_CALIBRATION,
+        status=SetupStatus.BOOTSTRAPPING,
+        robot_attachments=[{"attachment_id": "primary", "robot_id": "so101", "role": "primary"}],
+        execution_targets=[{"id": "real", "carrier": "real"}],
+        detected_facts={"connected": True, "calibration_missing": True},
+        missing_facts=["calibration_file"],
+    ).to_dict()
+    loop.sessions.save(session)
+
+    async def fake_execute_calibrate(context, on_progress=None):
+        canonical_path.parent.mkdir(parents=True, exist_ok=True)
+        canonical_path.write_text("{}", encoding="utf-8")
+        return ProcedureExecutionResult(
+            procedure=ProcedureKind.CALIBRATE,
+            ok=True,
+            message="saved calibration",
+            details={"calibration_phase": "completed"},
+        )
+
+    monkeypatch.setattr(loop.embodied_execution.executor, "execute_calibrate", fake_execute_calibrate)
+
+    result = await loop.embodied_execution.execute_action(session, action="calibrate")
+
+    state = session.metadata[SETUP_STATE_KEY]
+    assert result.ok is True
+    assert "embodied_calibration" not in session.metadata
+    assert state["stage"] == "handoff_ready"
+    assert state["status"] == "ready"
+    assert state["detected_facts"]["calibration_path"] == str(canonical_path)
+
+
+@pytest.mark.asyncio
+async def test_after_natural_language_calibration_next_primitive_bypasses_onboarding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _prepare_workspace(tmp_path)
+    provider = RecordingProvider(
+        responses=[
+            _tool_call_response(
+                "embodied_control",
+                {"action": "run_primitive", "primitive_name": "gripper_open", "primitive_args": {}},
+            ),
+            LLMResponse(content="Opened."),
+        ]
+    )
+    loop, provider, fake_exec = _build_loop(
+        tmp_path,
+        _standard_onboarding_and_ros2_responses("so101_setup"),
+        provider=provider,
+    )
+    calibration_file = tmp_path / "config.json"
+    canonical_path = calibration_file.parent / "calibration" / "so101" / "so101_real.json"
+    canonical_path.unlink()
+
+    async def fake_execute_calibrate(context, on_progress=None):
+        canonical_path.parent.mkdir(parents=True, exist_ok=True)
+        canonical_path.write_text("{}", encoding="utf-8")
+        return ProcedureExecutionResult(
+            procedure=ProcedureKind.CALIBRATE,
+            ok=True,
+            message="saved calibration",
+            details={"calibration_phase": "completed"},
+        )
+
+    monkeypatch.setattr(loop.embodied_execution.executor, "execute_calibrate", fake_execute_calibrate)
+
+    session_key = "cli:natural-calibration"
+    await loop.process_direct("我想接入一个 SO101", session_key=session_key)
+    await loop.process_direct("接好了", session_key=session_key)
+    calibration_response = await loop.process_direct("帮我标定", session_key=session_key)
+    motion_response = await loop.process_direct("打开夹爪", session_key=session_key)
+
+    session = loop.sessions.get_or_create(session_key)
+    assert calibration_response == "saved calibration"
+    assert session.metadata[SETUP_STATE_KEY]["stage"] == "handoff_ready"
+    assert provider.chat_calls == 2
+    assert motion_response == "Opened."
+    assert any("execute_primitive" in call for call in fake_exec.calls)

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from roboclaw.agent.tools.registry import ToolRegistry
+from roboclaw.embodied.localization import localize_text
 from roboclaw.embodied.definition.components.robots.model import RobotManifest
 from roboclaw.embodied.definition.systems.assemblies.model import AssemblyManifest
 from roboclaw.embodied.definition.systems.deployments.model import DeploymentProfile
@@ -32,6 +33,7 @@ class ExecutionContext:
     adapter_binding: Any
     profile: Any
     runtime: RuntimeSession
+    preferred_language: str = "en"
 
 
 @dataclass(frozen=True)
@@ -105,6 +107,10 @@ class ProcedureExecutor:
             self._adapters[context.runtime.id] = adapter
         return adapter
 
+    @staticmethod
+    def _preferred_language(context: Any) -> str:
+        return str(getattr(context, "preferred_language", "en") or "en")
+
     async def _best_effort_disconnect_before_calibration(self, context: ExecutionContext) -> None:
         adapter = self._adapters.get(context.runtime.id)
         if adapter is None:
@@ -141,36 +147,71 @@ class ProcedureExecutor:
         action: str,
         raw_error: Exception,
         reconnect_allowed: bool,
+        language: str = "en",
     ) -> str:
         message = str(raw_error).strip()
         lower = message.lower()
         reconnect_hint = (
-            " If this setup was already working earlier, reply `connect` to reconnect it first, then reply `calibrate` again."
+            localize_text(
+                language,
+                en=" If this setup was already working earlier, tell me to reconnect it first, then tell me to start calibration again.",
+                zh=" 如果这个 setup 之前是能工作的，先告诉我重新连接它，然后再告诉我重新开始标定。",
+            )
             if reconnect_allowed
             else ""
         )
         if "stable `/dev/serial/by-id/" in message or "/dev/serial/by-id/" in message and "configured" in lower:
-            return (
-                f"I could not find a stable SO101 USB/serial device, so {action}."
-                " Plug the controller into this machine and make sure the `/dev/serial/by-id/...` path is available,"
-                " then reply `calibrate` again."
+            return localize_text(
+                language,
+                en=(
+                    f"I could not find a stable SO101 USB/serial device, so {action}."
+                    " Plug the controller into this machine and make sure the `/dev/serial/by-id/...` path is available,"
+                    " then tell me to start calibration again."
+                ),
+                zh=(
+                    f"我没有找到稳定的 SO101 USB/串口设备，因此无法{action}。"
+                    " 请把控制器接到这台机器上，并确认 `/dev/serial/by-id/...` 路径可用，"
+                    " 然后再告诉我开始标定。"
+                ),
             )
         if "failed to open servo device" in lower or "resource busy" in lower or "permission denied" in lower:
-            return (
-                f"I found the SO101 USB device, but I could not open it, so {action}."
-                " Please make sure the arm power is on, the USB/serial cable is firmly connected,"
-                " and no other program is using the arm."
-                " Then reply `calibrate` again."
-                + reconnect_hint
+            return localize_text(
+                language,
+                en=(
+                    f"I found the SO101 USB device, but I could not open it, so {action}."
+                    " Please make sure the arm power is on, the USB/serial cable is firmly connected,"
+                    " and no other program is using the arm."
+                    " Then tell me to start calibration again."
+                    + reconnect_hint
+                ),
+                zh=(
+                    f"我找到了 SO101 的 USB 设备，但无法打开它，因此无法{action}。"
+                    " 请确认机械臂已经上电、USB/串口线连接牢靠，而且没有其他程序正在占用这台机械臂。"
+                    " 然后再告诉我开始标定。"
+                    + reconnect_hint
+                ),
             )
         if cls._is_serial_transport_error(message):
-            return (
-                f"I could talk to the SO101 USB device, but the arm did not answer, so {action}."
-                " Please make sure the arm power is on and the USB/serial cable is firmly connected."
-                " If you just replugged the cable or powered the arm back on, reply `calibrate` again."
-                + reconnect_hint
+            return localize_text(
+                language,
+                en=(
+                    f"I could talk to the SO101 USB device, but the arm did not answer, so {action}."
+                    " Please make sure the arm power is on and the USB/serial cable is firmly connected."
+                    " If you just replugged the cable or powered the arm back on, tell me to start calibration again."
+                    + reconnect_hint
+                ),
+                zh=(
+                    f"我可以访问 SO101 的 USB 设备，但机械臂没有响应，因此无法{action}。"
+                    " 请确认机械臂已经上电，并且 USB/串口线连接牢靠。"
+                    " 如果你刚重新插了线或者重新上电，请再告诉我开始标定。"
+                    + reconnect_hint
+                ),
             )
-        return f"RoboClaw could not {action}. {message}"
+        return localize_text(
+            language,
+            en=f"RoboClaw could not {action}. {message}",
+            zh=f"RoboClaw 无法{action}。{message}",
+        )
 
     async def execute_connect(
         self,
@@ -334,10 +375,18 @@ class ProcedureExecutor:
         return ProcedureExecutionResult(
             procedure=ProcedureKind.CALIBRATE,
             ok=False,
-            message=(
-                f"Setup `{context.setup_id}` needs calibration before execution."
-                + (f" Expected canonical path: `{expected_path}`." if expected_path else "")
-                + " Reply with `calibrate` after the hardware is ready so RoboClaw can walk you through it."
+            message=localize_text(
+                self._preferred_language(context),
+                en=(
+                    f"Setup `{context.setup_id}` needs calibration before execution."
+                    + (f" Expected canonical path: `{expected_path}`." if expected_path else "")
+                    + " Tell me to calibrate after the hardware is ready so RoboClaw can walk you through it."
+                ),
+                zh=(
+                    f"setup `{context.setup_id}` 在执行前需要先完成标定。"
+                    + (f" 标准标定文件路径应为：`{expected_path}`。" if expected_path else "")
+                    + " 等硬件准备好后，直接告诉我开始标定，我就会带你走完整个流程。"
+                ),
             ),
         )
 
@@ -358,7 +407,11 @@ class ProcedureExecutor:
             return ProcedureExecutionResult(
                 procedure=ProcedureKind.CALIBRATE,
                 ok=False,
-                message="There is no pending calibration interaction for this setup. Reply with `calibrate` first.",
+                message=localize_text(
+                    self._preferred_language(context),
+                    en="There is no pending calibration interaction for this setup. Tell me to calibrate first.",
+                    zh="这个 setup 当前没有待继续的标定流程。请先告诉我开始标定。",
+                ),
             )
         if flow.phase == "await_mid_pose_ack":
             return await self._start_so101_calibration_stream(context, flow=flow, on_progress=on_progress)
@@ -368,7 +421,11 @@ class ProcedureExecutor:
         return ProcedureExecutionResult(
             procedure=ProcedureKind.CALIBRATE,
             ok=False,
-            message="The pending calibration interaction is in an unknown state. Reply with `calibrate` to start again.",
+            message=localize_text(
+                self._preferred_language(context),
+                en="The pending calibration interaction is in an unknown state. Tell me to calibrate to start again.",
+                zh="当前待继续的标定流程处于未知状态。请重新告诉我开始标定。",
+            ),
         )
 
     def _calibration_path(self, context: ExecutionContext) -> Path | None:
@@ -387,10 +444,18 @@ class ProcedureExecutor:
         return ProcedureExecutionResult(
             procedure=ProcedureKind.CALIBRATE,
             ok=False,
-            message=(
-                f"Setup `{context.setup_id}` needs calibration before `connect` or motion."
-                f" Expected canonical path: `{calibration_path}`."
-                " Reply with `calibrate` to start the live SO101 calibration guide."
+            message=localize_text(
+                self._preferred_language(context),
+                en=(
+                    f"Setup `{context.setup_id}` needs calibration before `connect` or motion."
+                    f" Expected canonical path: `{calibration_path}`."
+                    " Tell me to calibrate to start the live SO101 calibration guide."
+                ),
+                zh=(
+                    f"setup `{context.setup_id}` 在 `connect` 或运动前需要先标定。"
+                    f" 标准标定文件路径应为：`{calibration_path}`。"
+                    " 直接告诉我开始标定，我就会启动 SO101 的实时标定引导。"
+                ),
             ),
             details={"calibration_path": str(calibration_path)},
         )
@@ -423,7 +488,11 @@ class ProcedureExecutor:
             return ProcedureExecutionResult(
                 procedure=ProcedureKind.CALIBRATE,
                 ok=False,
-                message=f"Setup `{context.setup_id}` does not declare a canonical calibration path.",
+                message=localize_text(
+                    self._preferred_language(context),
+                    en=f"Setup `{context.setup_id}` does not declare a canonical calibration path.",
+                    zh=f"setup `{context.setup_id}` 没有声明标准标定文件路径。",
+                ),
             )
         existing = self._so101_calibration_flows.get(context.runtime.id)
         if existing is not None:
@@ -465,6 +534,7 @@ class ProcedureExecutor:
                     action="start the live SO101 calibration guide",
                     raw_error=exc,
                     reconnect_allowed=overwrite_existing,
+                    language=self._preferred_language(context),
                 ),
                 details={"raw_error": str(exc), "calibration_path": str(calibration_path)},
             )
@@ -495,17 +565,33 @@ class ProcedureExecutor:
         expected_path = str(calibration_path)
         if phase == "await_mid_pose_ack":
             save_notice = (
-                f" RoboClaw will overwrite the existing calibration file at `{expected_path}` when you press Enter again."
+                localize_text(
+                    self._preferred_language(context),
+                    en=f" RoboClaw will overwrite the existing calibration file at `{expected_path}` when you press Enter again.",
+                    zh=f" 当你再次按 Enter 时，RoboClaw 会覆盖现有的标定文件 `{expected_path}`。",
+                )
                 if overwrite_existing
-                else f" RoboClaw will save the canonical calibration file to `{expected_path}` when you press Enter again."
+                else localize_text(
+                    self._preferred_language(context),
+                    en=f" RoboClaw will save the canonical calibration file to `{expected_path}` when you press Enter again.",
+                    zh=f" 当你再次按 Enter 时，RoboClaw 会把标准标定文件保存到 `{expected_path}`。",
+                )
             )
             return ProcedureExecutionResult(
                 procedure=ProcedureKind.CALIBRATE,
                 ok=False,
-                message=(
-                    f"SO101 calibration is ready for setup `{context.setup_id}`."
-                    " Move the arm to a middle pose first, then press Enter to start live calibration."
-                    + save_notice
+                message=localize_text(
+                    self._preferred_language(context),
+                    en=(
+                        f"SO101 calibration is ready for setup `{context.setup_id}`."
+                        " Move the arm to a middle pose first, then press Enter to start live calibration."
+                        + save_notice
+                    ),
+                    zh=(
+                        f"setup `{context.setup_id}` 的 SO101 标定已经准备好了。"
+                        " 先把机械臂移到中间位姿，然后按 Enter 开始实时标定。"
+                        + save_notice
+                    ),
                 ),
                 details={"calibration_path": expected_path, "calibration_phase": phase},
             )
@@ -513,17 +599,29 @@ class ProcedureExecutor:
             return ProcedureExecutionResult(
                 procedure=ProcedureKind.CALIBRATE,
                 ok=False,
-                message=(
-                    f"SO101 live calibration is already running for setup `{context.setup_id}`."
-                    " Keep moving every joint through its full range of motion, then press Enter again to stop and save."
-                    f" Canonical path: `{expected_path}`."
+                message=localize_text(
+                    self._preferred_language(context),
+                    en=(
+                        f"SO101 live calibration is already running for setup `{context.setup_id}`."
+                        " Keep moving every joint through its full range of motion, then press Enter again to stop and save."
+                        f" Canonical path: `{expected_path}`."
+                    ),
+                    zh=(
+                        f"setup `{context.setup_id}` 的 SO101 实时标定已经在运行。"
+                        " 继续把每个关节跑完整量程，然后再次按 Enter 停止并保存。"
+                        f" 标准路径：`{expected_path}`。"
+                    ),
                 ),
                 details={"calibration_path": expected_path, "calibration_phase": phase},
             )
         return ProcedureExecutionResult(
             procedure=ProcedureKind.CALIBRATE,
             ok=False,
-            message="SO101 calibration is in an unknown state. Reply with `calibrate` to restart it.",
+            message=localize_text(
+                self._preferred_language(context),
+                en="SO101 calibration is in an unknown state. Tell me to calibrate to restart it.",
+                zh="SO101 标定当前处于未知状态。请重新告诉我开始标定。",
+            ),
             details={"calibration_phase": phase},
         )
 
@@ -555,6 +653,7 @@ class ProcedureExecutor:
                     action="start live SO101 calibration",
                     raw_error=exc,
                     reconnect_allowed=flow.overwrite_existing,
+                    language=self._preferred_language(context),
                 ),
                 details={"raw_error": str(exc), "calibration_path": str(flow.calibration_path)},
             )
@@ -564,11 +663,20 @@ class ProcedureExecutor:
         return ProcedureExecutionResult(
             procedure=ProcedureKind.CALIBRATE,
             ok=False,
-            message=(
-                f"SO101 live calibration started for setup `{context.setup_id}`."
-                " RoboClaw is now streaming a LeRobot-style `MIN | POS | MAX` table above."
-                " Move every joint through its full range of motion, then press Enter again to stop and save."
-                f" Canonical path: `{flow.calibration_path}`."
+            message=localize_text(
+                self._preferred_language(context),
+                en=(
+                    f"SO101 live calibration started for setup `{context.setup_id}`."
+                    " RoboClaw is now streaming a LeRobot-style `MIN | POS | MAX` table above."
+                    " Move every joint through its full range of motion, then press Enter again to stop and save."
+                    f" Canonical path: `{flow.calibration_path}`."
+                ),
+                zh=(
+                    f"setup `{context.setup_id}` 的 SO101 实时标定已经开始。"
+                    " RoboClaw 现在正在上方持续输出 LeRobot 风格的 `MIN | POS | MAX` 表格。"
+                    " 请把每个关节都跑完整量程，然后再次按 Enter 停止并保存。"
+                    f" 标准路径：`{flow.calibration_path}`。"
+                ),
             ),
             details={"calibration_path": str(flow.calibration_path), "calibration_phase": "streaming"},
         )
@@ -596,7 +704,11 @@ class ProcedureExecutor:
             return ProcedureExecutionResult(
                 procedure=ProcedureKind.CALIBRATE,
                 ok=False,
-                message=f"RoboClaw could not save the SO101 calibration file. {exc}",
+                message=localize_text(
+                    self._preferred_language(context),
+                    en=f"RoboClaw could not save the SO101 calibration file. {exc}",
+                    zh=f"RoboClaw 无法保存 SO101 标定文件。{exc}",
+                ),
             )
 
         self._cleanup_so101_calibration_flow(context.runtime.id)
@@ -605,9 +717,16 @@ class ProcedureExecutor:
         return ProcedureExecutionResult(
             procedure=ProcedureKind.CALIBRATE,
             ok=True,
-            message=(
-                f"Saved SO101 calibration for setup `{context.setup_id}` to `{flow.calibration_path}`."
-                " You can retry `connect` or your motion command now."
+            message=localize_text(
+                self._preferred_language(context),
+                en=(
+                    f"Saved SO101 calibration for setup `{context.setup_id}` to `{flow.calibration_path}`."
+                    " You can retry `connect` or your motion command now."
+                ),
+                zh=(
+                    f"已经把 setup `{context.setup_id}` 的 SO101 标定保存到 `{flow.calibration_path}`。"
+                    " 现在你可以重新尝试 `connect` 或运动指令了。"
+                ),
             ),
             details={"calibration_path": str(flow.calibration_path), "calibration_phase": "completed"},
         )

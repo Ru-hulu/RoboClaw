@@ -11,6 +11,7 @@ from roboclaw.agent.tools.registry import ToolRegistry
 from roboclaw.bus.events import InboundMessage
 from roboclaw.bus.queue import MessageBus
 from roboclaw.embodied.onboarding import SETUP_STATE_KEY, OnboardingController, SetupOnboardingState, SetupStage, SetupStatus
+from roboclaw.embodied.onboarding.model import PREFERRED_LANGUAGE_KEY
 from roboclaw.providers.base import LLMResponse
 from roboclaw.session.manager import Session
 
@@ -355,8 +356,10 @@ async def test_onboarding_blocks_missing_profile_calibration_before_asset_genera
     assert state["detected_facts"]["calibration_missing"] is True
     assert "requires framework-managed calibration" in response.content
     assert str(calibration_file) in response.content
-    assert "Reply with `calibrate`" in response.content
-    assert not (tmp_path / "embodied" / "assemblies" / "so101_setup.py").exists()
+    assert "start calibration in natural language" in response.content
+    assert (tmp_path / "embodied" / "assemblies" / "so101_setup.py").exists()
+    assert (tmp_path / "embodied" / "deployments" / "so101_setup_real_local.py").exists()
+    assert (tmp_path / "embodied" / "adapters" / "so101_setup_ros2_local.py").exists()
 
 
 @pytest.mark.asyncio
@@ -424,7 +427,7 @@ async def test_onboarding_starts_guided_ros2_install_flow(tmp_path: Path) -> Non
     assert "Current step: `1` of `4`." in response.content
     assert "sudo add-apt-repository universe" in response.content
     assert "source /opt/ros/jazzy/setup.zsh" not in response.content
-    assert "Reply with `done`" in response.content
+    assert "tell me in natural language that you are done" in response.content
 
 
 @pytest.mark.asyncio
@@ -606,7 +609,7 @@ async def test_onboarding_does_not_treat_ros1_install_as_ros2_available(tmp_path
     state = session.metadata[SETUP_STATE_KEY]
     assert state["stage"] == "resolve_prerequisites"
     assert state["detected_facts"]["ros2_available"] is False
-    assert "start ROS2 install" in response.content
+    assert "start ROS2 install in natural language" in response.content
 
 
 @pytest.mark.asyncio
@@ -701,3 +704,126 @@ async def test_agent_loop_routes_first_run_setup_without_calling_provider(tmp_pa
 
     assert "connected" in response
     assert provider.chat_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_onboarding_chinese_missing_calibration_reply_stays_in_chinese(tmp_path: Path) -> None:
+    _prepare_workspace(tmp_path)
+    calibration_file = tmp_path / "calibration" / "so101" / "so101_real.json"
+    calibration_file.unlink()
+    tools, _ = _build_tools(
+        tmp_path,
+        {
+            "for link in /dev/serial/by-id/*": "/dev/serial/by-id/usb-so101 -> /dev/ttyACM0\n/dev/ttyACM0\n",
+            SO101_SERIAL_PROBE_MARKER: SO101_SERIAL_PROBE_OK,
+            "command -v ros2": "ROS2_OK\nros2 0.0.0\nROS_DISTRO=jazzy\n",
+        },
+    )
+    controller = OnboardingController(tmp_path, tools)
+    session = Session(key="cli:direct")
+
+    await controller.handle_message(
+        InboundMessage(channel="cli", sender_id="user", chat_id="direct", content="我要接入 SO101"),
+        session,
+    )
+    response = await controller.handle_message(
+        InboundMessage(channel="cli", sender_id="user", chat_id="direct", content="已经接好了"),
+        session,
+    )
+
+    assert session.metadata[PREFERRED_LANGUAGE_KEY] == "zh"
+    assert "需要 RoboClaw 管理的标定" in response.content
+    assert "帮我标定" in response.content
+
+
+@pytest.mark.asyncio
+async def test_onboarding_can_start_calibration_from_natural_language_request(tmp_path: Path) -> None:
+    _prepare_workspace(tmp_path)
+    calibration_file = tmp_path / "calibration" / "so101" / "so101_real.json"
+    calibration_file.unlink()
+    tools, _ = _build_tools(
+        tmp_path,
+        {
+            "for link in /dev/serial/by-id/*": "/dev/serial/by-id/usb-so101 -> /dev/ttyACM0\n/dev/ttyACM0\n",
+            SO101_SERIAL_PROBE_MARKER: SO101_SERIAL_PROBE_OK,
+            "command -v ros2": "ROS2_OK\nros2 0.0.0\nROS_DISTRO=jazzy\n",
+        },
+    )
+    calls: list[tuple[str, str]] = []
+
+    async def calibration_starter(*, session: Session, action: str, setup_id: str, on_progress=None):
+        calls.append((action, setup_id))
+        session.metadata["embodied_calibration"] = {
+            "setup_id": setup_id,
+            "runtime_id": f"{session.key}:{setup_id}",
+            "phase": "await_mid_pose_ack",
+        }
+        return type("Started", (), {"message": "校准已经开始"})()
+
+    controller = OnboardingController(tmp_path, tools, calibration_starter=calibration_starter)
+    session = Session(key="cli:direct")
+
+    await controller.handle_message(
+        InboundMessage(channel="cli", sender_id="user", chat_id="direct", content="SO101"),
+        session,
+    )
+    await controller.handle_message(
+        InboundMessage(channel="cli", sender_id="user", chat_id="direct", content="connected"),
+        session,
+    )
+    response = await controller.handle_message(
+        InboundMessage(channel="cli", sender_id="user", chat_id="direct", content="帮我标定"),
+        session,
+    )
+
+    state = session.metadata[SETUP_STATE_KEY]
+    assert calls == [("calibrate", "so101_setup")]
+    assert state["stage"] == "await_calibration"
+    assert session.metadata["embodied_calibration"]["phase"] == "await_mid_pose_ack"
+    assert response.content == "校准已经开始"
+
+
+@pytest.mark.asyncio
+async def test_await_calibration_handoffs_directly_to_ready_when_calibration_exists(tmp_path: Path) -> None:
+    _prepare_workspace(tmp_path)
+    tools, _ = _build_tools(tmp_path, {})
+    controller = OnboardingController(tmp_path, tools)
+    session = Session(key="cli:direct")
+
+    state = SetupOnboardingState(
+        setup_id="so101_setup",
+        intake_slug="so101_setup",
+        assembly_id="so101_setup",
+        deployment_id="so101_setup_real_local",
+        adapter_id="so101_setup_ros2_local",
+        stage=SetupStage.AWAIT_CALIBRATION,
+        status=SetupStatus.BOOTSTRAPPING,
+        robot_attachments=[{"attachment_id": "primary", "robot_id": "so101", "role": "primary"}],
+        execution_targets=[{"id": "real", "carrier": "real"}],
+        detected_facts={
+            "connected": True,
+            "serial_device_by_id": "/dev/serial/by-id/usb-so101",
+            "calibration_missing": True,
+            "ros2_available": False,
+            "ros2_shell_initialized": False,
+            "ros2_installed_distros": ["jazzy"],
+        },
+        missing_facts=["calibration_file"],
+    )
+    state = await controller._write_assembly(state)
+    state = await controller._write_deployment(state)
+    state = await controller._write_adapter(state)
+    session.metadata[SETUP_STATE_KEY] = state.to_dict()
+
+    response = await controller.handle_message(
+        InboundMessage(channel="cli", sender_id="user", chat_id="direct", content="继续"),
+        session,
+    )
+
+    next_state = session.metadata[SETUP_STATE_KEY]
+    assert next_state["stage"] == "handoff_ready"
+    assert next_state["status"] == "ready"
+    assert "calibration_missing" not in next_state["detected_facts"]
+    assert "calibration_path" in next_state["detected_facts"]
+    assert "source /opt/ros" not in response.content
+    assert "就绪" in response.content

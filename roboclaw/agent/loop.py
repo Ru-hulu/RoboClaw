@@ -26,8 +26,10 @@ from roboclaw.bus.events import InboundMessage, OutboundMessage
 from roboclaw.embodied.execution.controller import EmbodiedExecutionController
 from roboclaw.embodied.execution.tools import EmbodiedControlTool, EmbodiedStatusTool
 from roboclaw.embodied.execution.orchestration.runtime import RuntimeManager
+from roboclaw.embodied.localization import choose_language
 from roboclaw.bus.queue import MessageBus
 from roboclaw.embodied.onboarding import OnboardingController
+from roboclaw.embodied.onboarding.model import PREFERRED_LANGUAGE_KEY, OnboardingIntent
 from roboclaw.providers.base import LLMProvider
 from roboclaw.session.manager import Session, SessionManager
 
@@ -91,11 +93,16 @@ class AgentLoop:
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
         self.embodied_runtime = RuntimeManager()
-        self.onboarding = OnboardingController(workspace=workspace, tools=self.tools)
         self.embodied_execution = EmbodiedExecutionController(
             workspace=workspace,
             tools=self.tools,
             runtime_manager=self.embodied_runtime,
+        )
+        self.onboarding = OnboardingController(
+            workspace=workspace,
+            tools=self.tools,
+            intent_parser=self._parse_onboarding_intent,
+            calibration_starter=self._start_onboarding_calibration,
         )
         self.subagents = SubagentManager(
             provider=provider,
@@ -188,7 +195,102 @@ class AgentLoop:
     def _embodied_runtime_context(self, session: Session) -> str:
         """Render the current embodied snapshot into runtime metadata."""
         snapshot = self.embodied_execution.build_agent_snapshot(session)
-        return "[Embodied Context]\n" + json.dumps(snapshot.to_dict(), ensure_ascii=False, sort_keys=True)
+        language = choose_language(session.metadata.get(PREFERRED_LANGUAGE_KEY))
+        return (
+            f"Preferred Response Language: {language}\n"
+            + "[Embodied Context]\n"
+            + json.dumps(snapshot.to_dict(), ensure_ascii=False, sort_keys=True)
+        )
+
+    async def _start_onboarding_calibration(
+        self,
+        *,
+        session: Session,
+        action: str,
+        setup_id: str,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
+    ) -> Any:
+        return await self.embodied_execution.execute_action(
+            session,
+            action=action,
+            setup_id=setup_id,
+            on_progress=on_progress,
+        )
+
+    async def _parse_onboarding_intent(
+        self,
+        session: Session,
+        state: Any,
+        content: str,
+    ) -> OnboardingIntent | None:
+        prompt = (
+            "You extract embodied onboarding intent as JSON.\n"
+            "Return exactly one JSON object and nothing else.\n"
+            "Use this schema:\n"
+            "{"
+            '"robot_ids": string[], "connected": true|false|null, "serial_path": string|null, '
+            '"ros2_install_profile": string|null, "ros2_state": true|false|null, '
+            '"ros2_install_requested": boolean, "ros2_step_advance": boolean, '
+            '"calibration_requested": boolean, "preferred_language": "en"|"zh"|null'
+            "}.\n"
+            "Do not infer facts that the user did not imply.\n"
+            "Examples:\n"
+            '- "帮我标定" -> {"calibration_requested": true, "preferred_language": "zh"}\n'
+            '- "已经接好了" -> {"connected": true, "preferred_language": "zh"}\n'
+            '- "not connected yet" -> {"connected": false, "preferred_language": "en"}\n'
+            '- "这一步做完了，继续" -> {"ros2_step_advance": true, "preferred_language": "zh"}'
+        )
+        messages = [
+            {"role": "system", "content": prompt},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "session_key": session.key,
+                        "current_stage": getattr(state, "stage", None).value if getattr(state, "stage", None) else None,
+                        "missing_facts": list(getattr(state, "missing_facts", [])),
+                        "robots": list(getattr(state, "robot_attachments", [])),
+                        "sensors": list(getattr(state, "sensor_attachments", [])),
+                        "user_message": content,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+        response = await self.provider.chat(
+            messages=messages,
+            tools=None,
+            model=self.model,
+            max_tokens=300,
+            temperature=0.0,
+            reasoning_effort="low",
+        )
+        raw = self._strip_think(response.content) or ""
+        if not raw:
+            return None
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```(?:json)?\s*", "", raw)
+            raw = re.sub(r"\s*```$", "", raw)
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            logger.warning("Failed to decode onboarding intent JSON: {}", raw)
+            return None
+        if not isinstance(payload, dict):
+            return None
+        robot_ids = payload.get("robot_ids")
+        return OnboardingIntent(
+            robot_ids=tuple(item for item in robot_ids if isinstance(item, str)) if isinstance(robot_ids, list) else (),
+            connected=payload.get("connected") if isinstance(payload.get("connected"), bool) else None,
+            serial_path=payload.get("serial_path") if isinstance(payload.get("serial_path"), str) else None,
+            ros2_install_profile=payload.get("ros2_install_profile") if isinstance(payload.get("ros2_install_profile"), str) else None,
+            ros2_state=payload.get("ros2_state") if isinstance(payload.get("ros2_state"), bool) else None,
+            ros2_install_requested=bool(payload.get("ros2_install_requested")),
+            ros2_step_advance=bool(payload.get("ros2_step_advance")),
+            calibration_requested=bool(payload.get("calibration_requested")),
+            preferred_language=payload.get("preferred_language") if isinstance(payload.get("preferred_language"), str) else None,
+        )
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -461,8 +563,8 @@ class AgentLoop:
 
         self._set_embodied_tool_context(session, on_progress or _bus_progress)
 
-        if self.onboarding.has_active_onboarding(session) or self.onboarding.should_handle_setup_edit(session, msg.content):
-            response = await self.onboarding.handle_message(
+        if self.embodied_execution.has_pending_calibration(session):
+            response = await self.embodied_execution.handle_pending_calibration_message(
                 msg,
                 session,
                 on_progress=on_progress or _bus_progress,
@@ -470,8 +572,8 @@ class AgentLoop:
             self.sessions.save(session)
             return response
 
-        if self.embodied_execution.has_pending_calibration(session):
-            response = await self.embodied_execution.handle_pending_calibration_message(
+        if self.onboarding.has_active_onboarding(session) or self.onboarding.should_handle_setup_edit(session, msg.content):
+            response = await self.onboarding.handle_message(
                 msg,
                 session,
                 on_progress=on_progress or _bus_progress,
@@ -500,7 +602,7 @@ class AgentLoop:
             media=msg.media if msg.media else None,
             channel=msg.channel,
             chat_id=msg.chat_id,
-            extra_runtime_context="[Embodied Context]\n" + json.dumps(snapshot.to_dict(), ensure_ascii=False, sort_keys=True),
+            extra_runtime_context=self._embodied_runtime_context(session),
         )
 
         final_content, _, all_msgs = await self._run_agent_loop(

@@ -14,6 +14,7 @@ except ImportError:  # pragma: no cover - Python < 3.11 fallback for local tooli
 
 
 SETUP_STATE_KEY = "embodied_onboarding"
+PREFERRED_LANGUAGE_KEY = "embodied_preferred_language"
 
 
 class SetupStage(StrEnum):
@@ -22,6 +23,7 @@ class SetupStage(StrEnum):
     IDENTIFY_SETUP_SCOPE = "identify_setup_scope"
     CONFIRM_CONNECTED = "confirm_connected"
     PROBE_LOCAL_ENVIRONMENT = "probe_local_environment"
+    AWAIT_CALIBRATION = "await_calibration"
     RESOLVE_PREREQUISITES = "resolve_prerequisites"
     INSTALL_PREREQUISITES = "install_prerequisites"
     VALIDATE_PREREQUISITES = "validate_prerequisites"
@@ -98,3 +100,19 @@ class SetupOnboardingState:
             generated_assets=dict(data.get("generated_assets", {})),
             notes=list(data.get("notes", [])),
         )
+
+
+@dataclass(frozen=True)
+class OnboardingIntent:
+    """Structured user intent extracted for onboarding."""
+
+    robot_ids: tuple[str, ...] = ()
+    sensor_changes: tuple[dict[str, Any], ...] = ()
+    connected: bool | None = None
+    serial_path: str | None = None
+    ros2_install_profile: str | None = None
+    ros2_state: bool | None = None
+    ros2_install_requested: bool = False
+    ros2_step_advance: bool = False
+    calibration_requested: bool = False
+    preferred_language: str | None = None

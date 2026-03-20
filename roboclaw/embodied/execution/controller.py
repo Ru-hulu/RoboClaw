@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from roboclaw.agent.tools.registry import ToolRegistry
 from roboclaw.bus.events import InboundMessage, OutboundMessage
 from roboclaw.embodied.catalog import build_catalog
+from roboclaw.embodied.localization import choose_language, localize_text
 from roboclaw.embodied.execution.orchestration.procedures.model import ProcedureKind
 from roboclaw.embodied.execution.orchestration.runtime.executor import (
     ExecutionContext,
@@ -16,7 +17,8 @@ from roboclaw.embodied.execution.orchestration.runtime.executor import (
     ProcedureExecutor,
 )
 from roboclaw.embodied.execution.orchestration.runtime.manager import RuntimeManager
-from roboclaw.embodied.onboarding import SETUP_STATE_KEY, SetupOnboardingState
+from roboclaw.embodied.onboarding import SETUP_STATE_KEY, SetupOnboardingState, SetupStage, SetupStatus
+from roboclaw.embodied.onboarding.model import PREFERRED_LANGUAGE_KEY
 from roboclaw.session.manager import Session
 
 ProgressCallback = Callable[[str], Awaitable[None]]
@@ -147,6 +149,18 @@ class EmbodiedExecutionController:
         "状态",
         "诊断",
     )
+    _CALIBRATION_REQUEST_HINTS = (
+        "calibrate",
+        "calibration",
+        "help me calibrate",
+        "start calibration",
+        "标定",
+        "校准",
+        "帮我标定",
+        "帮我校准",
+        "开始标定",
+        "开始校准",
+    )
 
     def __init__(self, workspace: Path, tools: ToolRegistry, runtime_manager: RuntimeManager):
         self.workspace = workspace
@@ -157,6 +171,15 @@ class EmbodiedExecutionController:
     def has_pending_calibration(self, session: Session) -> bool:
         """Return whether the session has an interactive calibration in progress."""
         return self._load_calibration_state(session) is not None
+
+    @staticmethod
+    def _language(session: Session) -> str:
+        return choose_language(session.metadata.get(PREFERRED_LANGUAGE_KEY))
+
+    @classmethod
+    def _looks_like_calibration_request(cls, content: str) -> bool:
+        normalized = " ".join(content.strip().lower().split())
+        return any(token in normalized for token in cls._CALIBRATION_REQUEST_HINTS)
 
     def looks_like_embodied_request(self, content: str) -> bool:
         """Best-effort embodied intent detector for onboarding interception only."""
@@ -204,18 +227,44 @@ class EmbodiedExecutionController:
         )
         if setup is None:
             session.metadata.pop(EMBODIED_CALIBRATION_STATE_KEY, None)
-            content = ambiguity or "The pending calibration interaction no longer has a resolvable setup. Reply with `calibrate` again."
+            content = ambiguity or localize_text(
+                self._language(session),
+                en="The pending calibration interaction no longer has a resolvable setup. Tell me to calibrate again.",
+                zh="当前待继续的标定交互已经无法解析到可用的 setup 了。请再告诉我开始标定一次。",
+            )
             session.add_message("user", msg.content)
             session.add_message("assistant", content)
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=content, metadata=msg.metadata or {})
 
         context = self._build_context(session, setup)
         self._bind_active_setup(session, setup.setup_id)
+        runtime_phase = self.executor.calibration_phase(context.runtime.id)
+        if calibration_state and runtime_phase is None:
+            session.metadata.pop(EMBODIED_CALIBRATION_STATE_KEY, None)
+            content = localize_text(
+                context.preferred_language,
+                en=(
+                    f"The live calibration session for setup `{setup.setup_id}` expired when the prior agent process stopped."
+                    " Start calibration again to continue."
+                ),
+                zh=(
+                    f"setup `{setup.setup_id}` 的实时标定会话已经随着之前的 agent 进程退出而失效了。"
+                    " 请重新开始标定。"
+                ),
+            )
+            session.add_message("user", msg.content)
+            session.add_message("assistant", content)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=content,
+                metadata=msg.metadata or {},
+            )
         content = msg.content.strip()
         if not content:
             result = await self.executor.advance_calibration(context, on_progress=on_progress)
             self._sync_calibration_state(session, setup_id=setup.setup_id, runtime_id=context.runtime.id, result=result)
-        elif content.lower() == "calibrate":
+        elif self._looks_like_calibration_request(content):
             phase = self.executor.calibration_phase(context.runtime.id) or str(calibration_state.get("phase") or "")
             calibration_path = context.profile.canonical_calibration_path()
             result = self.executor._so101_calibration_phase_message(
@@ -226,14 +275,28 @@ class EmbodiedExecutionController:
         else:
             phase = self.executor.calibration_phase(context.runtime.id) or str(calibration_state.get("phase") or "")
             if phase == "await_mid_pose_ack":
-                message = (
-                    f"Calibration is pending for setup `{setup.setup_id}`."
-                    " Move the arm to a middle pose, then press Enter to start live calibration."
+                message = localize_text(
+                    context.preferred_language,
+                    en=(
+                        f"Calibration is pending for setup `{setup.setup_id}`."
+                        " Move the arm to a middle pose, then press Enter to start live calibration."
+                    ),
+                    zh=(
+                        f"setup `{setup.setup_id}` 的标定正在等待继续。"
+                        " 先把机械臂移动到中间位姿，然后按 Enter 开始实时标定。"
+                    ),
                 )
             else:
-                message = (
-                    f"Calibration is already streaming for setup `{setup.setup_id}`."
-                    " Keep moving every joint through its full range of motion, then press Enter to stop and save."
+                message = localize_text(
+                    context.preferred_language,
+                    en=(
+                        f"Calibration is already streaming for setup `{setup.setup_id}`."
+                        " Keep moving every joint through its full range of motion, then press Enter to stop and save."
+                    ),
+                    zh=(
+                        f"setup `{setup.setup_id}` 的标定已经在实时采样了。"
+                        " 继续把每个关节跑完整量程，然后按 Enter 停止并保存。"
+                    ),
                 )
             result = ProcedureExecutionResult(
                 procedure=ProcedureKind.CALIBRATE,
@@ -243,6 +306,8 @@ class EmbodiedExecutionController:
             )
 
         self._sync_runtime_state(session, setup_id=setup.setup_id, runtime=context.runtime)
+        if result.ok and result.procedure == ProcedureKind.CALIBRATE:
+            self._mark_onboarding_ready_after_calibration(session, context)
         session.add_message("user", msg.content)
         session.add_message("assistant", result.message)
         return OutboundMessage(
@@ -308,7 +373,11 @@ class EmbodiedExecutionController:
                     action=action,
                     setup_id=None,
                     runtime_status=None,
-                    message=ambiguity or "I found multiple embodied setups. Choose a setup id first.",
+                    message=ambiguity or localize_text(
+                        self._language(session),
+                        en="I found multiple embodied setups. Choose a setup id first.",
+                        zh="我找到了多个具身 setup。请先告诉我你要用哪个 setup id。",
+                    ),
                     needs_user_choice=True,
                     suggested_next_actions=("ask_user_to_select_setup",),
                     details={"candidates": candidate_summaries},
@@ -318,9 +387,16 @@ class EmbodiedExecutionController:
                 action=action,
                 setup_id=None,
                 runtime_status=None,
-                message=(
-                    "I could not find a ready embodied setup in this workspace yet. "
-                    "Start with onboarding, for example: `I want to connect a real robot`."
+                message=localize_text(
+                    self._language(session),
+                    en=(
+                        "I could not find a ready embodied setup in this workspace yet. "
+                        "Start with onboarding, for example: `I want to connect a real robot`."
+                    ),
+                    zh=(
+                        "我还没有在这个 workspace 里找到可直接执行的具身 setup。"
+                        " 请先开始 onboarding，例如：`我想连接一个真实机器人`。"
+                    ),
                 ),
                 suggested_next_actions=("start_onboarding",),
                 details={},
@@ -347,7 +423,11 @@ class EmbodiedExecutionController:
                     action=action,
                     setup_id=setup.setup_id,
                     runtime_status=context.runtime.status.value,
-                    message="`primitive_name` is required when action is `run_primitive`.",
+                    message=localize_text(
+                        context.preferred_language,
+                        en="`primitive_name` is required when action is `run_primitive`.",
+                        zh="当 action 是 `run_primitive` 时，必须提供 `primitive_name`。",
+                    ),
                     details={},
                 )
             result = await self.executor.execute_move(
@@ -362,11 +442,17 @@ class EmbodiedExecutionController:
                 action=action,
                 setup_id=setup.setup_id,
                 runtime_status=context.runtime.status.value,
-                message=f"Unsupported embodied action `{action}`.",
+                message=localize_text(
+                    context.preferred_language,
+                    en=f"Unsupported embodied action `{action}`.",
+                    zh=f"不支持的具身动作 `{action}`。",
+                ),
                 details={},
             )
 
         self._sync_runtime_state(session, setup_id=setup.setup_id, runtime=context.runtime)
+        if result.ok and result.procedure == ProcedureKind.CALIBRATE:
+            self._mark_onboarding_ready_after_calibration(session, context)
         return self._tool_result_from_execution(
             session,
             action=action,
@@ -481,6 +567,7 @@ class EmbodiedExecutionController:
             adapter_binding=adapter_binding,
             profile=profile,
             runtime=runtime,
+            preferred_language=choose_language(session.metadata.get(PREFERRED_LANGUAGE_KEY)),
         )
 
     def _resolve_setup(
@@ -494,7 +581,11 @@ class EmbodiedExecutionController:
         if explicit_setup_id:
             selected = next((item for item in candidates if item.setup_id == explicit_setup_id), None)
             if selected is None:
-                return None, f"I could not find embodied setup `{explicit_setup_id}` in this workspace.", candidates
+                return None, localize_text(
+                    self._language(session),
+                    en=f"I could not find embodied setup `{explicit_setup_id}` in this workspace.",
+                    zh=f"我没有在这个 workspace 里找到具身 setup `{explicit_setup_id}`。",
+                ), candidates
             return selected, None, candidates
 
         session_setup_id = self._session_setup_id(session)
@@ -507,7 +598,11 @@ class EmbodiedExecutionController:
             return None, None, candidates
         if len(candidates) > 1:
             ids = ", ".join(item.setup_id for item in candidates)
-            return None, f"I found multiple embodied setups in this workspace: {ids}. Tell me which setup id to use.", candidates
+            return None, localize_text(
+                self._language(session),
+                en=f"I found multiple embodied setups in this workspace: {ids}. Tell me which setup id to use.",
+                zh=f"我在这个 workspace 里找到了多个具身 setup：{ids}。请告诉我你要用哪个 setup id。",
+            ), candidates
         return candidates[0], None, candidates
 
     def _workspace_candidates(self, catalog: Any) -> list[ResolvedSetup]:
@@ -609,6 +704,33 @@ class EmbodiedExecutionController:
         if not isinstance(raw, dict):
             return None
         return dict(raw)
+
+    @staticmethod
+    def _mark_onboarding_ready_after_calibration(
+        session: Session,
+        context: ExecutionContext,
+    ) -> None:
+        raw = session.metadata.get(SETUP_STATE_KEY)
+        if not isinstance(raw, dict):
+            return
+        try:
+            state = SetupOnboardingState.from_dict(raw)
+        except Exception:
+            return
+        if state.setup_id != context.setup_id:
+            return
+        calibration_path = context.profile.canonical_calibration_path()
+        facts = dict(state.detected_facts)
+        facts["calibration_path"] = str(calibration_path)
+        facts.pop("calibration_missing", None)
+        ready_state = replace(
+            state,
+            stage=SetupStage.HANDOFF_READY,
+            status=SetupStatus.READY,
+            detected_facts=facts,
+            missing_facts=[],
+        )
+        session.metadata[SETUP_STATE_KEY] = ready_state.to_dict()
 
     @staticmethod
     def _sync_calibration_state(
