@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
+from roboclaw.embodied.execution.orchestration.collection_server import CollectionDashboard
 from roboclaw.embodied.execution.orchestration.dataset import EpisodeDataset
 from roboclaw.embodied.execution.orchestration.skills import SkillSpec
 
@@ -85,15 +86,30 @@ async def collect_episodes(
         shutil.rmtree(staging_dir)
     completed = 0
     failed = 0
+    dashboard: CollectionDashboard | None = CollectionDashboard()
+    try:
+        await dashboard.start()
+        dashboard.update(status="collecting", total_episodes=num_episodes, skill_name=skill.name)
+    except OSError:
+        dashboard = None
 
     try:
         for episode_id in range(1, num_episodes + 1):
+            async def progress(message: str) -> None:
+                if dashboard is not None:
+                    dashboard.update(current_episode=episode_id)
+                    dashboard.add_log(message)
+                if on_progress is not None:
+                    await on_progress(message)
+
+            if dashboard is not None:
+                dashboard.update(status="collecting", current_episode=episode_id)
             dataset.begin_episode(episode_id)
             verdict = None
             if supervisor is None:
                 reset_result = await executor.execute_reset(context)
                 record_data = (
-                    await record_episode(executor, context, skill, episode_id, output_dir=staging_dir, on_progress=on_progress)
+                    await record_episode(executor, context, skill, episode_id, output_dir=staging_dir, on_progress=progress)
                     if reset_result.ok
                     else {"episode_id": episode_id, "skill_name": skill.name, "steps": [], "ok": False}
                 )
@@ -101,13 +117,12 @@ async def collect_episodes(
                 retries = 0
                 while True:
                     record_data, verdict = await supervisor.supervise_episode(
-                        executor, context, skill, episode_id, output_dir=staging_dir, on_progress=on_progress
+                        executor, context, skill, episode_id, output_dir=staging_dir, on_progress=progress
                     )
                     if not verdict.should_retry or retries >= 2:
                         break
                     retries += 1
-                    if on_progress is not None:
-                        await on_progress(f"Retrying episode {episode_id}/{num_episodes} ({retries}/2): {verdict.reason}.")
+                    await progress(f"Retrying episode {episode_id}/{num_episodes} ({retries}/2): {verdict.reason}.")
 
             record = EpisodeRecord(
                 episode_id=record_data["episode_id"],
@@ -134,11 +149,22 @@ async def collect_episodes(
                 )
             completed += int(record.ok)
             failed += int(not record.ok)
-            if on_progress is not None:
-                await on_progress(f"Episode {episode_id}/{num_episodes} completed ({'ok' if record.ok else 'failed'}).")
+            if dashboard is not None:
+                latest = record.steps[-1] if record.steps else {}
+                state = dict(latest.get("state_after") or {})
+                dashboard.update(
+                    current_episode=episode_id,
+                    latest_joints=dict(state.get("joint_positions") or state),
+                    latest_sensors=list(latest.get("sensors") or ()),
+                    status="ok" if record.ok else "failed",
+                )
+            await progress(f"Episode {episode_id}/{num_episodes} completed ({'ok' if record.ok else 'failed'}).")
     finally:
         if staging_dir.exists():
             shutil.rmtree(staging_dir)
+        if dashboard is not None:
+            dashboard.update(status="completed" if failed == 0 else "completed_with_failures", current_episode=completed + failed)
+            await dashboard.stop()
 
     dataset_path = dataset.save(name=skill.name)
 
