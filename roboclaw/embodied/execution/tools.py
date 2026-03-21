@@ -74,7 +74,7 @@ class EmbodiedControlTool(Tool):
     def description(self) -> str:
         return (
             "Execute one embodied action through the strong procedure pipeline. "
-            "Supported actions: connect, calibrate, debug, reset, run_primitive, run_skill, collect_data."
+            "Supported actions: connect, calibrate, debug, reset, run_primitive, run_skill, collect_data, start_training."
         )
 
     @property
@@ -84,7 +84,16 @@ class EmbodiedControlTool(Tool):
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["connect", "calibrate", "debug", "reset", "run_primitive", "run_skill", "collect_data"],
+                    "enum": [
+                        "connect",
+                        "calibrate",
+                        "debug",
+                        "reset",
+                        "run_primitive",
+                        "run_skill",
+                        "collect_data",
+                        "start_training",
+                    ],
                     "description": "Embodied action to execute.",
                 },
                 "setup_id": {
@@ -113,6 +122,21 @@ class EmbodiedControlTool(Tool):
                     "minimum": 1,
                     "description": "How many episodes to collect when action is collect_data.",
                 },
+                "dataset_path": {
+                    "type": "string",
+                    "description": "Path to the JSONL dataset when action is start_training.",
+                },
+                "algorithm": {
+                    "type": "string",
+                    "default": "default",
+                    "description": "Training algorithm identifier for start_training.",
+                },
+                "epochs": {
+                    "type": "integer",
+                    "default": 100,
+                    "minimum": 1,
+                    "description": "How many epochs to request when action is start_training.",
+                },
             },
             "required": ["action"],
         }
@@ -126,6 +150,9 @@ class EmbodiedControlTool(Tool):
         skill_name: str | None = None,
         skill_args: dict[str, Any] | None = None,
         num_episodes: int | None = None,
+        dataset_path: str | None = None,
+        algorithm: str | None = None,
+        epochs: int | None = None,
         **kwargs: Any,
     ) -> str:
         if self._session is None:
@@ -139,6 +166,9 @@ class EmbodiedControlTool(Tool):
             skill_name=skill_name,
             skill_args=skill_args,
             num_episodes=num_episodes,
+            dataset_path=dataset_path,
+            algorithm=algorithm,
+            epochs=epochs,
             on_progress=self._on_progress,
         )
         return json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True)

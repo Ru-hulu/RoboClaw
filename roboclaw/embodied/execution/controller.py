@@ -13,6 +13,7 @@ from roboclaw.bus.events import InboundMessage, OutboundMessage
 from roboclaw.embodied.catalog import build_catalog
 from roboclaw.embodied.localization import choose_language, localize_text
 from roboclaw.embodied.execution.orchestration.data_collection import collect_episodes
+from roboclaw.embodied.execution.orchestration.training import TrainingConfig, run_training
 from roboclaw.embodied.execution.orchestration.skills import execute_skill
 from roboclaw.embodied.execution.orchestration.procedures.model import ProcedureKind
 from roboclaw.embodied.execution.orchestration.runtime.executor import (
@@ -333,6 +334,9 @@ class EmbodiedExecutionController:
         skill_name: str | None = None,
         skill_args: dict[str, Any] | None = None,
         num_episodes: int | None = None,
+        dataset_path: str | None = None,
+        algorithm: str | None = None,
+        epochs: int | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> EmbodiedToolResult:
         """Execute one strong-constrained embodied action for the agent."""
@@ -509,6 +513,58 @@ class EmbodiedExecutionController:
                     "episodes_requested": collection.episodes_requested,
                     "episodes_completed": collection.episodes_completed,
                     "episodes_failed": collection.episodes_failed,
+                },
+            )
+        elif action == "start_training":
+            if not dataset_path or not dataset_path.strip():
+                return EmbodiedToolResult(
+                    ok=False,
+                    action=action,
+                    setup_id=setup.setup_id,
+                    runtime_status=context.runtime.status.value,
+                    message=localize_text(
+                        context.preferred_language,
+                        en="`dataset_path` is required when action is `start_training`.",
+                        zh="当 action 是 `start_training` 时，必须提供 `dataset_path`。",
+                    ),
+                    details={},
+                )
+            requested_epochs = 100 if epochs is None else epochs
+            if requested_epochs < 1:
+                return EmbodiedToolResult(
+                    ok=False,
+                    action=action,
+                    setup_id=setup.setup_id,
+                    runtime_status=context.runtime.status.value,
+                    message=localize_text(
+                        context.preferred_language,
+                        en="`epochs` must be at least 1 when action is `start_training`.",
+                        zh="当 action 是 `start_training` 时，`epochs` 必须至少为 1。",
+                    ),
+                    details={},
+                )
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            training = await run_training(
+                TrainingConfig(
+                    dataset_path=dataset_path,
+                    output_dir=str(self.workspace / "embodied" / "checkpoints" / f"{setup.setup_id}_{timestamp}"),
+                    algorithm=algorithm or "default",
+                    epochs=requested_epochs,
+                ),
+                on_progress=on_progress,
+            )
+            self._sync_runtime_state(session, setup_id=setup.setup_id, runtime=context.runtime)
+            return EmbodiedToolResult(
+                ok=training.ok and training.checkpoint_path is not None,
+                action=action,
+                setup_id=setup.setup_id,
+                runtime_status=context.runtime.status.value,
+                message="Training complete! Checkpoint saved." if training.ok and training.checkpoint_path else "Training failed.",
+                details={
+                    "checkpoint_path": training.checkpoint_path,
+                    "epochs_completed": training.epochs_completed,
+                    "training_message": training.message,
+                    **training.details,
                 },
             )
         else:
