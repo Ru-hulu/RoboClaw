@@ -74,7 +74,8 @@ class EmbodiedControlTool(Tool):
     def description(self) -> str:
         return (
             "Execute one embodied action through the strong procedure pipeline. "
-            "Supported actions: connect, calibrate, debug, reset, run_primitive, run_skill, collect_data, start_training."
+            "Supported actions: connect, calibrate, debug, reset, run_primitive, run_skill, collect_data, "
+            "start_training, deploy_policy, stop_policy."
         )
 
     @property
@@ -93,6 +94,8 @@ class EmbodiedControlTool(Tool):
                         "run_skill",
                         "collect_data",
                         "start_training",
+                        "deploy_policy",
+                        "stop_policy",
                     ],
                     "description": "Embodied action to execute.",
                 },
@@ -137,6 +140,10 @@ class EmbodiedControlTool(Tool):
                     "minimum": 1,
                     "description": "How many epochs to request when action is start_training.",
                 },
+                "checkpoint_path": {
+                    "type": "string",
+                    "description": "Checkpoint path when action is deploy_policy.",
+                },
             },
             "required": ["action"],
         }
@@ -153,6 +160,7 @@ class EmbodiedControlTool(Tool):
         dataset_path: str | None = None,
         algorithm: str | None = None,
         epochs: int | None = None,
+        checkpoint_path: str | None = None,
         **kwargs: Any,
     ) -> str:
         if self._session is None:
@@ -169,6 +177,7 @@ class EmbodiedControlTool(Tool):
             dataset_path=dataset_path,
             algorithm=algorithm,
             epochs=epochs,
+            checkpoint_path=checkpoint_path,
             on_progress=self._on_progress,
         )
         return json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True)

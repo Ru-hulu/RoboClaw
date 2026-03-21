@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -13,6 +14,12 @@ from roboclaw.bus.events import InboundMessage, OutboundMessage
 from roboclaw.embodied.catalog import build_catalog
 from roboclaw.embodied.localization import choose_language, localize_text
 from roboclaw.embodied.execution.orchestration.data_collection import collect_episodes
+from roboclaw.embodied.execution.orchestration.inference import (
+    _INFERENCE_SESSIONS,
+    InferenceSession,
+    start_inference,
+    stop_inference,
+)
 from roboclaw.embodied.execution.orchestration.training import TrainingConfig, run_training
 from roboclaw.embodied.execution.orchestration.skills import execute_skill
 from roboclaw.embodied.execution.orchestration.procedures.model import ProcedureKind
@@ -337,6 +344,7 @@ class EmbodiedExecutionController:
         dataset_path: str | None = None,
         algorithm: str | None = None,
         epochs: int | None = None,
+        checkpoint_path: str | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> EmbodiedToolResult:
         """Execute one strong-constrained embodied action for the agent."""
@@ -566,6 +574,68 @@ class EmbodiedExecutionController:
                     "training_message": training.message,
                     **training.details,
                 },
+            )
+        elif action == "deploy_policy":
+            if not checkpoint_path or not checkpoint_path.strip():
+                return EmbodiedToolResult(
+                    ok=False,
+                    action=action,
+                    setup_id=setup.setup_id,
+                    runtime_status=context.runtime.status.value,
+                    message=localize_text(
+                        context.preferred_language,
+                        en="`checkpoint_path` is required when action is `deploy_policy`.",
+                        zh="当 action 是 `deploy_policy` 时，必须提供 `checkpoint_path`。",
+                    ),
+                    details={},
+                )
+            active = _INFERENCE_SESSIONS.get(setup.setup_id)
+            if active is not None and active.running:
+                return EmbodiedToolResult(
+                    ok=False,
+                    action=action,
+                    setup_id=setup.setup_id,
+                    runtime_status=context.runtime.status.value,
+                    message="Policy is already running.",
+                    details={"checkpoint_path": active.checkpoint_path, "steps_completed": active.steps_completed},
+                )
+            deployment = InferenceSession(
+                checkpoint_path=checkpoint_path,
+                setup_id=setup.setup_id,
+                stop_event=asyncio.Event(),
+            )
+            _INFERENCE_SESSIONS[setup.setup_id] = deployment
+            deployment.task = asyncio.create_task(start_inference(deployment, self.executor, context, on_progress))
+            return EmbodiedToolResult(
+                ok=True,
+                action=action,
+                setup_id=setup.setup_id,
+                runtime_status=context.runtime.status.value,
+                message="Policy deployed and running!",
+                details={"checkpoint_path": checkpoint_path},
+            )
+        elif action == "stop_policy":
+            deployment = _INFERENCE_SESSIONS.get(setup.setup_id)
+            if deployment is None:
+                return EmbodiedToolResult(
+                    ok=False,
+                    action=action,
+                    setup_id=setup.setup_id,
+                    runtime_status=context.runtime.status.value,
+                    message="No policy is currently running.",
+                    details={},
+                )
+            result = stop_inference(deployment)
+            if deployment.task is not None:
+                result = await deployment.task
+            self._sync_runtime_state(session, setup_id=setup.setup_id, runtime=context.runtime)
+            return EmbodiedToolResult(
+                ok=result.ok,
+                action=action,
+                setup_id=setup.setup_id,
+                runtime_status=context.runtime.status.value,
+                message=f"Policy stopped after {result.steps_completed} steps.",
+                details={"checkpoint_path": deployment.checkpoint_path, **result.details},
             )
         else:
             return EmbodiedToolResult(
