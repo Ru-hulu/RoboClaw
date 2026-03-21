@@ -1,9 +1,9 @@
-"""Calibration driver contracts and registry."""
+"""Calibration driver contracts."""
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Any, Protocol, TYPE_CHECKING
+from typing import Protocol, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from roboclaw.embodied.execution.orchestration.runtime.executor import (
@@ -47,50 +47,7 @@ class CalibrationDriver(Protocol):
         """Clean up any in-memory calibration state for one runtime."""
 
 
-class CalibrationDriverRegistry:
-    """Registry of robot-specific calibration drivers."""
-
-    def __init__(self) -> None:
-        self._entries: dict[str, CalibrationDriver] = {}
-
-    def register(self, driver: CalibrationDriver) -> None:
-        self._entries[driver.id] = driver
-
-    def get(self, driver_id: str | None) -> CalibrationDriver | None:
-        if driver_id is None:
-            return None
-        return self._entries.get(driver_id)
-
-    def list(self) -> tuple[CalibrationDriver, ...]:
-        return tuple(self._entries.values())
-
-
-_CALIBRATION_DRIVERS = CalibrationDriverRegistry()
-
-
-def register_calibration_driver(driver: CalibrationDriver) -> None:
-    """Register one calibration driver."""
-
-    _CALIBRATION_DRIVERS.register(driver)
-
-
-def get_calibration_driver(driver_id: str | None) -> CalibrationDriver | None:
-    """Resolve one calibration driver by id."""
-
-    return _CALIBRATION_DRIVERS.get(driver_id)
-
-
-def list_calibration_drivers() -> tuple[CalibrationDriver, ...]:
-    """List all calibration drivers."""
-
-    return _CALIBRATION_DRIVERS.list()
-
-
 __all__ = [
     "CalibrationDriver",
-    "CalibrationDriverRegistry",
     "ProgressCallback",
-    "get_calibration_driver",
-    "list_calibration_drivers",
-    "register_calibration_driver",
 ]

@@ -6,14 +6,15 @@ import re
 from typing import Any
 
 from roboclaw.embodied.builtins.model import BuiltinEmbodiment
-from roboclaw.embodied.probes import get_probe_provider, register_probe_provider
 from roboclaw.embodied.execution.orchestration.runtime.calibration import (
-    get_calibration_driver,
-    register_calibration_driver,
+    CalibrationDriver,
 )
+from roboclaw.embodied.probes import ProbeProvider
 
 _BUILTINS_BY_ID: dict[str, BuiltinEmbodiment] = {}
 _BUILTINS_BY_ROBOT_ID: dict[str, BuiltinEmbodiment] = {}
+_CALIBRATION_DRIVERS: dict[str, CalibrationDriver] = {}
+_PROBE_PROVIDERS: dict[str, ProbeProvider] = {}
 _DEFAULTS_LOADED = False
 
 
@@ -24,15 +25,15 @@ def _normalize_token(value: str | None) -> str:
 def register_builtin_embodiment(
     embodiment: BuiltinEmbodiment,
     *,
-    calibration_driver: Any | None = None,
-    probe_provider: Any | None = None,
+    calibration_driver: CalibrationDriver | None = None,
+    probe_provider: ProbeProvider | None = None,
 ) -> None:
     """Register one framework-owned built-in embodiment."""
 
     if calibration_driver is not None:
-        register_calibration_driver(calibration_driver)
+        _CALIBRATION_DRIVERS[calibration_driver.id] = calibration_driver
     if probe_provider is not None:
-        register_probe_provider(probe_provider)
+        _PROBE_PROVIDERS[probe_provider.id] = probe_provider
     _BUILTINS_BY_ID[embodiment.id] = embodiment
     _BUILTINS_BY_ROBOT_ID[embodiment.robot.id] = embodiment
 
@@ -139,18 +140,22 @@ def get_control_surface_runtime_factory(profile_or_robot_id: str | None) -> Any 
     return None
 
 
-def get_builtin_calibration_driver(driver_id: str | None) -> Any | None:
+def get_builtin_calibration_driver(driver_id: str | None) -> CalibrationDriver | None:
     """Resolve one registered calibration driver."""
 
     _ensure_defaults_loaded()
-    return get_calibration_driver(driver_id)
+    if driver_id is None:
+        return None
+    return _CALIBRATION_DRIVERS.get(driver_id)
 
 
-def get_builtin_probe_provider(provider_id: str | None) -> Any | None:
+def get_builtin_probe_provider(provider_id: str | None) -> ProbeProvider | None:
     """Resolve one registered onboarding probe provider."""
 
     _ensure_defaults_loaded()
-    return get_probe_provider(provider_id)
+    if provider_id is None:
+        return None
+    return _PROBE_PROVIDERS.get(provider_id)
 
 
 __all__ = [

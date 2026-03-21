@@ -86,3 +86,63 @@ class RobotManifest:
 
     def primitive(self, name: str) -> PrimitiveSpec | None:
         return next((primitive for primitive in self.primitives if primitive.name == name), None)
+
+
+def quick_manifest(
+    *,
+    id: str,
+    name: str,
+    robot_type: RobotType,
+    primitives: tuple[PrimitiveSpec, ...],
+    description: str = "",
+    capability_families: tuple[CapabilityFamily, ...] | None = None,
+    default_named_poses: tuple[str, ...] = (),
+    suggested_sensor_ids: tuple[str, ...] = (),
+    setup_hints: tuple[str, ...] = (),
+) -> RobotManifest:
+    from roboclaw.embodied.definition.foundation.schema import (
+        HealthFieldSpec,
+        ObservationFieldSpec,
+        ValueUnit,
+    )
+
+    manifest_description = description or f"{name} {robot_type.value} robot."
+    manifest_capability_families = capability_families
+    if manifest_capability_families is None:
+        manifest_capability_families = tuple(
+            dict.fromkeys(primitive.capability_family for primitive in primitives)
+        )
+
+    return RobotManifest(
+        id=id,
+        name=name,
+        description=manifest_description,
+        robot_type=robot_type,
+        capability_families=manifest_capability_families,
+        primitives=primitives,
+        observation_schema=ObservationSchema(
+            id=f"{id}_obs_v1",
+            fields=(
+                ObservationFieldSpec(
+                    name="joint_positions",
+                    value_type="dict[str,float]",
+                    description="Current joint positions.",
+                    unit=ValueUnit.RADIAN,
+                ),
+            ),
+        ),
+        health_schema=HealthSchema(
+            id=f"{id}_health_v1",
+            fields=(
+                HealthFieldSpec(
+                    name="status",
+                    value_type="str",
+                    description="Overall health status.",
+                ),
+            ),
+        ),
+        default_named_poses=default_named_poses,
+        suggested_sensor_ids=suggested_sensor_ids,
+        safety=SafetyProfile(),
+        setup_hints=setup_hints,
+    )
