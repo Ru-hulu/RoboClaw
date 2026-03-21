@@ -25,10 +25,11 @@
 
 - [x] 1. 摄像头组合：本体 + 摄像头在 assembly 中绑定，实时取图，数据可录入 episode ✅
 - [x] 2. 数据采集格式：借鉴 LeRobot dataset 范式，实现带图像的 episode 录制格式（依赖 #1） ✅
-- [ ] 3. ACT 训练 recipe：借鉴 LeRobot ACT 实现，作为第一个内置可训练 policy（依赖 #2）
-- [x] 4. Layer 2 能力查询接口：从 primitive 的 CapabilityFamily 自动聚合本体能力，Agent 可查询 ✅
-- [ ] 5. 接入 PiperX 作为第二个 builtin 本体，参考 Evo-RL（GitHub），验证框架泛化（依赖 #4）
-- [ ] 6. L1 验收测试：Claude Code 扮演小白用户，自由对话连接 SO101 并让夹爪动起来（独立，可并行）
+- [x] 3. 数据采集 GUI：采集时自动启动 HTTP 可视化界面（摄像头画面 + episode 进度 + 关节状态），借鉴 LeRobot，映射端口供远程浏览器访问 ✅
+- [ ] 4. ACT 训练 recipe：借鉴 LeRobot ACT 实现，作为第一个内置可训练 policy（依赖 #2）
+- [x] 5. Layer 2 能力查询接口：从 primitive 的 CapabilityFamily 自动聚合本体能力，Agent 可查询 ✅
+- [ ] 6. 接入 PiperX 作为第二个 builtin 本体，参考 Evo-RL（GitHub），验证框架泛化（依赖 #5）
+- [ ] 7. 验收测试（见 `docs/acceptance-test.md`）：A1 夹爪开合 / A4 仿真体验 / A6 采集 10 episode / A7 训练 ACT policy
 
 
 ---
@@ -52,5 +53,4 @@
 
 - 本地：`python -m pytest tests/ -x -q`
 - 远程 Docker：按 memory 中存储的流程执行（`reference_remote_validation.md`）
-- **验收测试：** Claude Code 扮演小白用户，带着目标自由对话 RoboClaw，根据 RoboClaw 反馈模拟小白的想法，一步一步交互。最终能完成目标即通过。
-- 测试通过不算验收，对话走通才算。
+- **每次代码改动后，必须按 `docs/acceptance-test.md` 执行验收测试。** Claude Code 扮演小白用户，自由对话 RoboClaw，通过摄像头验证夹爪开合。测试通过不算验收，对话走通才算。
