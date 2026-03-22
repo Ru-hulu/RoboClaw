@@ -62,7 +62,7 @@ class OnboardingController:
         "connect", "real robot", "setup", "onboard",
         "真实机器人", "真实的机器人", "机械臂", "机器人",
     )
-    _SIM_KEYWORDS = ("simulation", "sim", "no robot", "try it", "virtual", "仿真", "没有机器人", "试试", "虚拟")
+    _SIM_KEYWORDS = ("simulation", "no robot", "try simulation", "virtual robot", "仿真", "没有机器人", "试试仿真", "虚拟机器人")
     _SETUP_EDIT_KEYWORDS = (
         "camera", "sensor", "serial", "/dev/", "ros2", "deployment", "adapter", "installed", "replace",
     )
@@ -181,7 +181,7 @@ class OnboardingController:
 
     def _looks_like_sim_request(self, content: str) -> bool:
         text = " ".join(content.lower().split())
-        return bool(re.search(r"\bsim\b", text)) or any(keyword in text for keyword in self._SIM_KEYWORDS if keyword != "sim")
+        return any(keyword in text for keyword in self._SIM_KEYWORDS)
 
     def _looks_like_setup_edit(self, content: str) -> bool:
         text = content.lower()
