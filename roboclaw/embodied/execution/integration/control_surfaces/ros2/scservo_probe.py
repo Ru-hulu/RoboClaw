@@ -17,7 +17,11 @@ def main(argv: list[str] | None = None) -> int:
         print("usage: python -m roboclaw.embodied.execution.integration.control_surfaces.ros2.scservo_probe <device-by-id>")
         return 2
 
-    if importlib.util.find_spec("scservo_sdk") is None:
+    try:
+        sdk_available = "scservo_sdk" in sys.modules or importlib.util.find_spec("scservo_sdk") is not None
+    except ValueError:
+        sdk_available = "scservo_sdk" in sys.modules
+    if not sdk_available:
         print("ROBOCLAW_SO101_SERIAL_SDK_MISSING")
         return 0
 

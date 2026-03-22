@@ -10,7 +10,7 @@ from typing import Any
 
 from roboclaw.agent.memory import MemoryStore
 from roboclaw.agent.skills import SkillsLoader
-from roboclaw.utils.helpers import detect_image_mime
+from roboclaw.utils.helpers import detect_image_mime, ensure_jpeg
 
 
 class ContextBuilder:
@@ -170,6 +170,8 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
             mime = detect_image_mime(raw) or mimetypes.guess_type(path)[0]
             if not mime or not mime.startswith("image/"):
                 continue
+            # Convert to JPEG for universal provider compatibility & smaller payloads
+            raw, mime = ensure_jpeg(raw, mime)
             b64 = base64.b64encode(raw).decode()
             images.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
 

@@ -13,6 +13,13 @@ except ImportError:  # pragma: no cover - Python < 3.11 fallback for local tooli
         """Fallback for Python versions without enum.StrEnum."""
 
 
+class CalibrationPhase(StrEnum):
+    """Phases of an interactive SO101 calibration flow."""
+
+    AWAIT_MID_POSE_ACK = "await_mid_pose_ack"
+    STREAMING = "streaming"
+
+
 class RuntimeStatus(StrEnum):
     """Lifecycle state of one active embodied runtime."""
 

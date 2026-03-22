@@ -5,24 +5,18 @@ from __future__ import annotations
 from roboclaw.embodied.execution.orchestration.procedures.model import (
     AdapterProcedureAction,
     CancellationMode,
-    CompensationTrigger,
-    IdempotencyConflictPolicy,
-    IdempotencyMode,
     InterventionTiming,
     OperatorInterventionPoint,
     OrchestratorProcedureAction,
     PreconditionOperator,
     PreconditionSource,
     ProcedureCancellationPolicy,
-    ProcedureCompensationSpec,
     ProcedureDefinition,
-    ProcedureIdempotencyPolicy,
     ProcedureKind,
     ProcedurePrecondition,
     ProcedureRetryPolicy,
     ProcedureStep,
     ProcedureStepEdge,
-    RollbackStrategy,
     adapter_action,
     orchestrator_action,
 )
@@ -68,22 +62,6 @@ CONNECT_PROCEDURE = ProcedureDefinition(
                 cancel_action=adapter_action(AdapterProcedureAction.DISCONNECT),
                 timeout_s=5.0,
             ),
-            compensation=ProcedureCompensationSpec(
-                action=adapter_action(AdapterProcedureAction.DISCONNECT),
-                description="Disconnect transport if connection partially succeeded.",
-                triggers=(
-                    CompensationTrigger.ON_FAILURE,
-                    CompensationTrigger.ON_CANCEL,
-                    CompensationTrigger.ON_TIMEOUT,
-                ),
-                timeout_s=10.0,
-            ),
-            idempotency=ProcedureIdempotencyPolicy(
-                mode=IdempotencyMode.BEST_EFFORT,
-                key_fields=("deployment_id", "target_id"),
-                conflict_policy=IdempotencyConflictPolicy.REUSE_RESULT,
-                cache_window_s=30.0,
-            ),
         ),
         ProcedureStep(
             "verify_state",
@@ -104,13 +82,6 @@ CONNECT_PROCEDURE = ProcedureDefinition(
         mode=CancellationMode.SAFE_POINT,
         cancel_action=adapter_action(AdapterProcedureAction.DISCONNECT),
         timeout_s=10.0,
-    ),
-    rollback_strategy=RollbackStrategy.REVERSE_COMPENSATION,
-    idempotency_policy=ProcedureIdempotencyPolicy(
-        mode=IdempotencyMode.BEST_EFFORT,
-        key_fields=("deployment_id", "target_id"),
-        conflict_policy=IdempotencyConflictPolicy.REUSE_RESULT,
-        cache_window_s=60.0,
     ),
     operator_interventions=(
         OperatorInterventionPoint(
@@ -144,16 +115,6 @@ CALIBRATE_PROCEDURE = ProcedureDefinition(
                 cancel_action=orchestrator_action(OrchestratorProcedureAction.CANCEL_CALIBRATION),
                 timeout_s=10.0,
             ),
-            compensation=ProcedureCompensationSpec(
-                action=orchestrator_action(OrchestratorProcedureAction.CANCEL_CALIBRATION),
-                description="Cancel partially started calibration tasks.",
-                triggers=(
-                    CompensationTrigger.ON_FAILURE,
-                    CompensationTrigger.ON_CANCEL,
-                    CompensationTrigger.ON_TIMEOUT,
-                ),
-                timeout_s=30.0,
-            ),
         ),
         ProcedureStep(
             "track",
@@ -168,13 +129,6 @@ CALIBRATE_PROCEDURE = ProcedureDefinition(
         mode=CancellationMode.SAFE_POINT,
         cancel_action=orchestrator_action(OrchestratorProcedureAction.CANCEL_CALIBRATION),
         timeout_s=15.0,
-    ),
-    rollback_strategy=RollbackStrategy.REVERSE_COMPENSATION,
-    idempotency_policy=ProcedureIdempotencyPolicy(
-        mode=IdempotencyMode.STRICT,
-        key_fields=("deployment_id", "target_ids"),
-        conflict_policy=IdempotencyConflictPolicy.REJECT_DUPLICATE,
-        cache_window_s=120.0,
     ),
     operator_interventions=(
         OperatorInterventionPoint(
@@ -224,23 +178,6 @@ MOVE_PROCEDURE = ProcedureDefinition(
                 cancel_action=adapter_action(AdapterProcedureAction.STOP),
                 timeout_s=3.0,
             ),
-            compensation=ProcedureCompensationSpec(
-                action=adapter_action(AdapterProcedureAction.STOP),
-                description="Stop motion and hold position when execution aborts.",
-                triggers=(
-                    CompensationTrigger.ON_FAILURE,
-                    CompensationTrigger.ON_CANCEL,
-                    CompensationTrigger.ON_TIMEOUT,
-                ),
-                timeout_s=5.0,
-                best_effort=False,
-            ),
-            idempotency=ProcedureIdempotencyPolicy(
-                mode=IdempotencyMode.STRICT,
-                key_fields=("session_id", "primitive_name", "primitive_args_hash"),
-                conflict_policy=IdempotencyConflictPolicy.REJECT_DUPLICATE,
-                cache_window_s=15.0,
-            ),
         ),
     ),
     default_timeout_s=20.0,
@@ -248,13 +185,6 @@ MOVE_PROCEDURE = ProcedureDefinition(
         mode=CancellationMode.IMMEDIATE,
         cancel_action=adapter_action(AdapterProcedureAction.STOP),
         timeout_s=3.0,
-    ),
-    rollback_strategy=RollbackStrategy.REVERSE_COMPENSATION,
-    idempotency_policy=ProcedureIdempotencyPolicy(
-        mode=IdempotencyMode.STRICT,
-        key_fields=("session_id", "primitive_name", "primitive_args_hash"),
-        conflict_policy=IdempotencyConflictPolicy.REJECT_DUPLICATE,
-        cache_window_s=30.0,
     ),
     operator_interventions=(
         OperatorInterventionPoint(
@@ -314,13 +244,6 @@ DEBUG_PROCEDURE = ProcedureDefinition(
         cancel_action=adapter_action(AdapterProcedureAction.STOP),
         timeout_s=5.0,
     ),
-    rollback_strategy=RollbackStrategy.NONE,
-    idempotency_policy=ProcedureIdempotencyPolicy(
-        mode=IdempotencyMode.BEST_EFFORT,
-        key_fields=("session_id", "debug_scope"),
-        conflict_policy=IdempotencyConflictPolicy.REUSE_RESULT,
-        cache_window_s=10.0,
-    ),
 )
 
 RESET_PROCEDURE = ProcedureDefinition(
@@ -359,34 +282,12 @@ RESET_PROCEDURE = ProcedureDefinition(
             "Reset to the default safe pose or mode.",
             timeout_s=20.0,
             retry_policy=ProcedureRetryPolicy(max_retries=1, backoff_s=1.0),
-            compensation=ProcedureCompensationSpec(
-                action=adapter_action(AdapterProcedureAction.RECOVER),
-                description="Run recovery if reset leaves system unstable.",
-                triggers=(
-                    CompensationTrigger.ON_FAILURE,
-                    CompensationTrigger.ON_TIMEOUT,
-                ),
-                timeout_s=15.0,
-            ),
-            idempotency=ProcedureIdempotencyPolicy(
-                mode=IdempotencyMode.STRICT,
-                key_fields=("session_id", "reset_mode"),
-                conflict_policy=IdempotencyConflictPolicy.REUSE_RESULT,
-                cache_window_s=20.0,
-            ),
         ),
     ),
     default_timeout_s=20.0,
     cancellation_policy=ProcedureCancellationPolicy(
         mode=CancellationMode.NON_CANCELLABLE,
         timeout_s=5.0,
-    ),
-    rollback_strategy=RollbackStrategy.REVERSE_COMPENSATION,
-    idempotency_policy=ProcedureIdempotencyPolicy(
-        mode=IdempotencyMode.STRICT,
-        key_fields=("session_id", "reset_mode"),
-        conflict_policy=IdempotencyConflictPolicy.REUSE_RESULT,
-        cache_window_s=60.0,
     ),
     operator_interventions=(
         OperatorInterventionPoint(

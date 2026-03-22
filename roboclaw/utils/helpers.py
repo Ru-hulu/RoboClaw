@@ -18,6 +18,47 @@ def detect_image_mime(data: bytes) -> str | None:
     return None
 
 
+def ensure_jpeg(data: bytes, mime: str | None) -> tuple[bytes, str]:
+    """Convert non-JPEG images to JPEG for API compatibility.
+
+    Some LLM providers reject PNG or other formats. Converting to JPEG
+    also significantly reduces payload size, protecting conversation context.
+
+    Returns (jpeg_bytes, "image/jpeg") on success, or (original, original_mime) on failure.
+    """
+    if mime == "image/jpeg" or (mime is None and data[:3] == b"\xff\xd8\xff"):
+        return data, "image/jpeg"
+
+    # Try PIL first
+    try:
+        import importlib
+        pil_image = importlib.import_module("PIL.Image")
+        import io
+        img = pil_image.open(io.BytesIO(data)).convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        return buf.getvalue(), "image/jpeg"
+    except Exception:
+        pass
+
+    # Try cv2 fallback
+    try:
+        import importlib
+        import io
+        cv2 = importlib.import_module("cv2")
+        import numpy as np
+        arr = np.frombuffer(data, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is not None:
+            ok, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if ok:
+                return encoded.tobytes(), "image/jpeg"
+    except Exception:
+        pass
+
+    return data, mime or "application/octet-stream"
+
+
 def ensure_dir(path: Path) -> Path:
     """Ensure directory exists, return it."""
     path.mkdir(parents=True, exist_ok=True)
@@ -29,11 +70,25 @@ def timestamp() -> str:
     return datetime.now().isoformat()
 
 
+def normalize_token(value: str | None) -> str:
+    """Normalize a string token for fuzzy matching (strip, lowercase, remove separators)."""
+    return re.sub(r"[\s\-_]+", "", str(value or "").strip().lower())
+
+
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*]')
 
 def safe_filename(name: str) -> str:
     """Replace unsafe path characters with underscores."""
     return _UNSAFE_CHARS.sub("_", name).strip()
+
+
+def strip_code_fences(text: str) -> str:
+    """Strip leading/trailing markdown code fences (```json ... ```)."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:\w+)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    return text.strip()
 
 
 def split_message(content: str, max_len: int = 2000) -> list[str]:

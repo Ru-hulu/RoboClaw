@@ -13,6 +13,8 @@ from roboclaw.agent.tools.filesystem import ListDirTool, ReadFileTool, WriteFile
 from roboclaw.agent.tools.registry import ToolRegistry
 from roboclaw.bus.queue import MessageBus
 from roboclaw.config.loader import CONFIG_PATH_ENV, set_config_path
+from roboclaw.embodied.builtins import get_builtin_calibration_driver
+from roboclaw.embodied.builtins.so101 import So101CalibrationFlow, So101CalibrationDriver
 from roboclaw.embodied.execution.integration.transports.ros2 import canonical_ros2_namespace
 from roboclaw.embodied.execution.integration.control_surfaces.ros2.so101_feetech import (
     ADDR_HOMING_OFFSET,
@@ -29,7 +31,6 @@ from roboclaw.embodied.execution.orchestration.procedures.model import Procedure
 from roboclaw.embodied.execution.orchestration.runtime.executor import (
     ProcedureExecutionResult,
     ProcedureExecutor,
-    So101CalibrationFlow,
 )
 from roboclaw.embodied.execution.orchestration.runtime.manager import RuntimeManager
 from roboclaw.embodied.execution.orchestration.runtime.model import RuntimeStatus
@@ -188,11 +189,6 @@ def _write_setup_assets(root: Path, setup_id: str, *, launch_command: str | None
                 '    default_execution_target_id="real",',
                 "    frame_transforms=(),",
                 "    tools=(),",
-                "    control_groups=(),",
-                "    safety_zones=(),",
-                "    safety_boundaries=(),",
-                "    failure_domains=(),",
-                "    resource_ownerships=(),",
                 ").build()",
                 "",
             ]
@@ -790,6 +786,8 @@ def _execution_context(
         adapter_id="so101_setup_ros2_local",
     )
     runtime.status = runtime_status
+    driver = _so101_driver()
+    driver.cleanup(runtime.id)
     context = SimpleNamespace(
         setup_id="so101_setup",
         assembly=SimpleNamespace(id="so101_setup"),
@@ -806,11 +804,18 @@ def _execution_context(
             robot_id="so101",
             requires_calibration=True,
             canonical_calibration_path=lambda: calibration_path,
+            calibration_driver_id="so101_manual_calibration",
         ),
         runtime=runtime,
         preferred_language=preferred_language,
     )
     return executor, context, calibration_path
+
+
+def _so101_driver() -> So101CalibrationDriver:
+    driver = get_builtin_calibration_driver("so101_manual_calibration")
+    assert isinstance(driver, So101CalibrationDriver)
+    return driver
 
 
 @pytest.mark.asyncio
@@ -945,8 +950,9 @@ async def test_calibrate_prompts_for_mid_pose_then_saves_on_second_enter(tmp_pat
             return None
 
     fake_monitor = FakeMonitor()
-    monkeypatch.setattr(executor, "_build_so101_calibration_monitor", lambda _: fake_monitor)
-    monkeypatch.setattr(executor, "_so101_calibration_stream_settings", lambda: (0.0, 0.0, None))
+    driver = _so101_driver()
+    monkeypatch.setattr(driver, "_build_monitor", lambda _: fake_monitor)
+    monkeypatch.setattr(driver, "_stream_settings", lambda: (0.0, 0.0, None))
 
     async def on_progress(content: str) -> None:
         progress.append(content)
@@ -970,7 +976,7 @@ async def test_calibrate_prompts_for_mid_pose_then_saves_on_second_enter(tmp_pat
     assert fake_monitor.snapshot_calls >= 1
     payload = json.loads(calibration_path.read_text(encoding="utf-8"))
     assert payload["gripper"]["range_min"] == 1900
-    assert executor.calibration_phase(context.runtime.id) is None
+    assert executor.calibration_phase(context) is None
 
 
 @pytest.mark.asyncio
@@ -987,14 +993,15 @@ async def test_calibrate_allows_overwriting_existing_file(tmp_path: Path, monkey
         def disconnect(self) -> None:
             return None
 
-    monkeypatch.setattr(executor, "_build_so101_calibration_monitor", lambda _: FakeMonitor())
+    driver = _so101_driver()
+    monkeypatch.setattr(driver, "_build_monitor", lambda _: FakeMonitor())
 
     prompt = await executor.execute_calibrate(context)
 
     assert prompt.ok is False
     assert "overwrite the existing calibration file" in prompt.message
     assert str(calibration_path) in prompt.message
-    assert executor.calibration_phase(context.runtime.id) == "await_mid_pose_ack"
+    assert executor.calibration_phase(context) == "await_mid_pose_ack"
 
 
 @pytest.mark.asyncio
@@ -1025,13 +1032,14 @@ async def test_calibrate_disconnects_active_runtime_before_monitor_setup(
             return None
 
     executor._adapters[context.runtime.id] = FakeAdapter()
-    monkeypatch.setattr(executor, "_build_so101_calibration_monitor", lambda _: FakeMonitor())
+    driver = _so101_driver()
+    monkeypatch.setattr(driver, "_build_monitor", lambda _: FakeMonitor())
 
     prompt = await executor.execute_calibrate(context)
 
     assert prompt.ok is False
     assert disconnect_calls == ["disconnect"]
-    assert executor.calibration_phase(context.runtime.id) == "await_mid_pose_ack"
+    assert executor.calibration_phase(context) == "await_mid_pose_ack"
 
 
 @pytest.mark.asyncio
@@ -1054,7 +1062,8 @@ async def test_calibration_start_failure_returns_friendly_retry_guidance(
         def disconnect(self) -> None:
             return None
 
-    monkeypatch.setattr(executor, "_build_so101_calibration_monitor", lambda _: FakeMonitor())
+    driver = _so101_driver()
+    monkeypatch.setattr(driver, "_build_monitor", lambda _: FakeMonitor())
 
     prompt = await executor.execute_calibrate(context)
     started = await executor.advance_calibration(context)
@@ -1066,7 +1075,7 @@ async def test_calibration_start_failure_returns_friendly_retry_guidance(
     assert "reconnect it first" in started.message
     assert "There is no status packet" not in started.message
     assert started.details["raw_error"] == "read 0x38 for servo 1 failed: [TxRxResult] There is no status packet!"
-    assert executor.calibration_phase(context.runtime.id) is None
+    assert executor.calibration_phase(context) is None
 
 
 def test_prepare_manual_calibration_resets_homing_and_limits() -> None:
@@ -1114,8 +1123,9 @@ async def test_pending_calibration_blank_message_advances_without_provider(tmp_p
     }
     loop.sessions.save(session)
 
-    async def fake_advance(context, on_progress=None):
+    async def fake_advance(context, user_input=None, on_progress=None):
         assert context.runtime.id == runtime_id
+        assert user_input == ""
         return ProcedureExecutionResult(
             procedure=ProcedureKind.CALIBRATE,
             ok=False,
@@ -1124,7 +1134,7 @@ async def test_pending_calibration_blank_message_advances_without_provider(tmp_p
         )
 
     monkeypatch.setattr(loop.embodied_execution.executor, "advance_calibration", fake_advance)
-    loop.embodied_execution.executor._so101_calibration_flows[runtime_id] = So101CalibrationFlow(
+    _so101_driver()._flows[runtime_id] = So101CalibrationFlow(
         monitor=object(),
         calibration_path=tmp_path / "calibration" / "so101" / "so101_real.json",
         phase="await_mid_pose_ack",
@@ -1167,7 +1177,8 @@ async def test_pending_calibration_intercept_wins_over_active_onboarding(tmp_pat
     }
     loop.sessions.save(session)
 
-    async def fake_advance(context, on_progress=None):
+    async def fake_advance(context, user_input=None, on_progress=None):
+        assert user_input == ""
         return ProcedureExecutionResult(
             procedure=ProcedureKind.CALIBRATE,
             ok=False,
@@ -1177,7 +1188,7 @@ async def test_pending_calibration_intercept_wins_over_active_onboarding(tmp_pat
 
     monkeypatch.setattr(loop.embodied_execution.executor, "advance_calibration", fake_advance)
     runtime_id = f"{session.key}:so101_setup"
-    loop.embodied_execution.executor._so101_calibration_flows[runtime_id] = So101CalibrationFlow(
+    _so101_driver()._flows[runtime_id] = So101CalibrationFlow(
         monitor=object(),
         calibration_path=tmp_path / "calibration" / "so101" / "so101_real.json",
         phase="await_mid_pose_ack",

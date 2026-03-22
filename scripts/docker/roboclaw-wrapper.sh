@@ -9,8 +9,6 @@ if [ "${ROBOCLAW_ROS2_DISTRO:-none}" != "none" ] && [ -f "/opt/ros/${ROBOCLAW_RO
   set -u
 fi
 
-# Run the CLI with the Python environment that owns the wheel dependencies.
-# The generated console script can pick up /usr/bin/python3 as its shebang,
-# which breaks extension modules like pydantic_core when the app is installed
-# into the Python 3.11 environment under /usr/local.
-exec /usr/local/bin/python /usr/local/bin/roboclaw-real "$@"
+# Run the CLI via python3, which is the same Python used for all
+# components after the unified-environment simplification.
+exec python3 /usr/local/bin/roboclaw-real "$@"

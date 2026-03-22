@@ -10,10 +10,17 @@ from roboclaw.agent.tools.filesystem import ListDirTool, ReadFileTool, WriteFile
 from roboclaw.agent.tools.registry import ToolRegistry
 from roboclaw.bus.events import InboundMessage
 from roboclaw.bus.queue import MessageBus
+from roboclaw.embodied import SO101_ROBOT
+from roboclaw.embodied.builtins import register_builtin_embodiment
+from roboclaw.embodied.builtins.model import BuiltinEmbodiment
 from roboclaw.embodied.onboarding import SETUP_STATE_KEY, OnboardingController, SetupOnboardingState, SetupStage, SetupStatus
+from roboclaw.embodied.definition.components.robots.model import PrimitiveSpec, RobotManifest
+from roboclaw.embodied.definition.foundation.schema import RobotType
+from roboclaw.embodied.execution.integration.adapters.ros2.profiles import Ros2EmbodimentProfile
 from roboclaw.embodied.onboarding.model import PREFERRED_LANGUAGE_KEY
 from roboclaw.providers.base import LLMResponse
 from roboclaw.session.manager import Session
+import roboclaw.embodied.builtins.registry as builtins_registry
 
 
 @pytest.fixture(autouse=True)
@@ -118,6 +125,55 @@ def test_onboarding_routes_chinese_real_robot_request(tmp_path: Path) -> None:
     session = Session(key="cli:direct")
 
     assert controller.should_handle(session, "我想用一个真实的机器人")
+
+
+def test_onboarding_recognizes_new_builtin_alias_without_controller_changes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _prepare_workspace(tmp_path)
+    monkeypatch.setattr(
+        builtins_registry,
+        "_BUILTINS_BY_ID",
+        dict(builtins_registry._BUILTINS_BY_ID),
+    )
+    monkeypatch.setattr(
+        builtins_registry,
+        "_BUILTINS_BY_ROBOT_ID",
+        dict(builtins_registry._BUILTINS_BY_ROBOT_ID),
+    )
+    register_builtin_embodiment(
+        BuiltinEmbodiment(
+            id="demo_bot",
+            robot=RobotManifest(
+                id="demo_bot",
+                name="Demo Bot",
+                description="Fake built-in robot for onboarding registry tests.",
+                robot_type=RobotType.ARM,
+                capability_families=(),
+                primitives=(
+                    PrimitiveSpec(
+                        name="ping",
+                        kind=SO101_ROBOT.primitives[0].kind,
+                        capability_family=SO101_ROBOT.primitives[0].capability_family,
+                        command_mode=SO101_ROBOT.primitives[0].command_mode,
+                        description="Ping primitive.",
+                    ),
+                ),
+                observation_schema=SO101_ROBOT.observation_schema,
+                health_schema=SO101_ROBOT.health_schema,
+            ),
+            ros2_profile=Ros2EmbodimentProfile(
+                id="demo_bot_ros2_standard",
+                robot_id="demo_bot",
+            ),
+            onboarding_aliases=("demo bot", "demo arm"),
+        )
+    )
+    controller = OnboardingController(tmp_path, ToolRegistry())
+
+    assert controller._extract_robot_ids("please connect my demo bot") == ["demo_bot"]
+    assert controller.should_handle(Session(key="cli:direct"), "demo arm")
 
 
 def test_onboarding_normalizes_tty_input_back_to_by_id(monkeypatch, tmp_path: Path) -> None:

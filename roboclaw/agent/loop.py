@@ -23,6 +23,8 @@ from roboclaw.agent.tools.shell import ExecTool
 from roboclaw.agent.tools.spawn import SpawnTool
 from roboclaw.agent.tools.web import WebFetchTool, WebSearchTool
 from roboclaw.bus.events import InboundMessage, OutboundMessage
+from roboclaw.embodied.builtins import list_ros2_profiles
+from roboclaw.embodied.catalog import build_catalog
 from roboclaw.embodied.execution.controller import EmbodiedExecutionController
 from roboclaw.embodied.execution.tools import EmbodiedControlTool, EmbodiedStatusTool
 from roboclaw.embodied.execution.orchestration.runtime import RuntimeManager
@@ -32,6 +34,7 @@ from roboclaw.embodied.onboarding import OnboardingController
 from roboclaw.embodied.onboarding.model import PREFERRED_LANGUAGE_KEY, OnboardingIntent
 from roboclaw.providers.base import LLMProvider
 from roboclaw.session.manager import Session, SessionManager
+from roboclaw.utils.helpers import strip_code_fences
 
 if TYPE_CHECKING:
     from roboclaw.config.schema import ChannelsConfig, ExecToolConfig
@@ -192,9 +195,9 @@ class AgentLoop:
             if hasattr(tool, "set_context"):
                 tool.set_context(session, on_progress)
 
-    def _embodied_runtime_context(self, session: Session) -> str:
+    def _embodied_runtime_context(self, session: Session, catalog: Any | None = None) -> str:
         """Render the current embodied snapshot into runtime metadata."""
-        snapshot = self.embodied_execution.build_agent_snapshot(session)
+        snapshot = self.embodied_execution.build_agent_snapshot(session, catalog=catalog)
         language = choose_language(session.metadata.get(PREFERRED_LANGUAGE_KEY))
         return (
             f"Preferred Response Language: {language}\n"
@@ -223,6 +226,16 @@ class AgentLoop:
         state: Any,
         content: str,
     ) -> OnboardingIntent | None:
+        supported_robots: list[str] = []
+        for robot in self.onboarding.catalog.robots.list():
+            if robot.id not in supported_robots:
+                supported_robots.append(robot.id)
+
+        for profile in list_ros2_profiles():
+            if profile.robot_id not in supported_robots:
+                supported_robots.append(profile.robot_id)
+        example_robot = supported_robots[0] if supported_robots else "robot"
+
         prompt = (
             "You extract embodied onboarding intent as JSON.\n"
             "Return exactly one JSON object and nothing else.\n"
@@ -234,6 +247,11 @@ class AgentLoop:
             '"calibration_requested": boolean, "preferred_language": "en"|"zh"|null'
             "}.\n"
             "Do not infer facts that the user did not imply.\n"
+            f"Supported robot models (canonical IDs): {', '.join(supported_robots)}.\n"
+            "When the user mentions a robot, always normalize to the closest canonical ID from this list.\n"
+            f"For example: '{example_robot.upper()}', '{example_robot.replace('-', '_')}', "
+            f"'{example_robot.title()}', '{example_robot.replace('-', ' ')}' should all map to '{example_robot}'.\n"
+            "If the user's robot does not match any supported model, return the user's text as-is in robot_ids.\n"
             "Examples:\n"
             '- "帮我标定" -> {"calibration_requested": true, "preferred_language": "zh"}\n'
             '- "已经接好了" -> {"connected": true, "preferred_language": "zh"}\n'
@@ -268,10 +286,7 @@ class AgentLoop:
         raw = self._strip_think(response.content) or ""
         if not raw:
             return None
-        raw = raw.strip()
-        if raw.startswith("```"):
-            raw = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw = re.sub(r"\s*```$", "", raw)
+        raw = strip_code_fences(raw)
         try:
             payload = json.loads(raw)
         except Exception:
@@ -581,11 +596,12 @@ class AgentLoop:
             self.sessions.save(session)
             return response
 
-        snapshot = self.embodied_execution.build_agent_snapshot(session)
+        catalog = build_catalog(self.workspace)
+        snapshot = self.embodied_execution.build_agent_snapshot(session, catalog=catalog)
         if (
             snapshot.selected_setup_id is None
             and not snapshot.candidates
-            and self.embodied_execution.looks_like_embodied_request(msg.content)
+            and self.embodied_execution.looks_like_embodied_request(msg.content, catalog=catalog)
         ):
             response = await self.onboarding.handle_message(
                 msg,
@@ -602,7 +618,7 @@ class AgentLoop:
             media=msg.media if msg.media else None,
             channel=msg.channel,
             chat_id=msg.chat_id,
-            extra_runtime_context=self._embodied_runtime_context(session),
+            extra_runtime_context=self._embodied_runtime_context(session, catalog=catalog),
         )
 
         final_content, _, all_msgs = await self._run_agent_loop(

@@ -107,6 +107,7 @@ class OnboardingIntent:
     """Structured user intent extracted for onboarding."""
 
     robot_ids: tuple[str, ...] = ()
+    simulation_requested: bool = False
     sensor_changes: tuple[dict[str, Any], ...] = ()
     connected: bool | None = None
     serial_path: str | None = None
@@ -115,4 +116,5 @@ class OnboardingIntent:
     ros2_install_requested: bool = False
     ros2_step_advance: bool = False
     calibration_requested: bool = False
+    sim_viewer_mode: str | None = None
     preferred_language: str | None = None

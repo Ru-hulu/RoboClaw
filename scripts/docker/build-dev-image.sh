@@ -25,7 +25,6 @@ docker build \
   --build-arg "ROBOCLAW_DOCKER_PROFILE=${PROFILE}" \
   --build-arg "ROBOCLAW_INSTALL_ROS2=$(docker_profile_installs_ros2 "${PROFILE}")" \
   --build-arg "ROBOCLAW_ROS2_DISTRO=$(docker_profile_ros_distro "${PROFILE}")" \
-  --build-arg "ROBOCLAW_ROS2_CONTROL_PYTHON=$(docker_profile_control_bridge_python "${PROFILE}")" \
   "${build_args[@]}" \
   -t "$(dev_image_ref "${INSTANCE}" "${PROFILE}")" \
   "${REPO_ROOT}"

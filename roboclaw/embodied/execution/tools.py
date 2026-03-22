@@ -74,7 +74,8 @@ class EmbodiedControlTool(Tool):
     def description(self) -> str:
         return (
             "Execute one embodied action through the strong procedure pipeline. "
-            "Supported actions: connect, calibrate, debug, reset, run_primitive."
+            "Supported actions: connect, calibrate, debug, reset, run_primitive, run_skill, collect_data, "
+            "start_training, deploy_policy, stop_policy."
         )
 
     @property
@@ -84,7 +85,18 @@ class EmbodiedControlTool(Tool):
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["connect", "calibrate", "debug", "reset", "run_primitive"],
+                    "enum": [
+                        "connect",
+                        "calibrate",
+                        "debug",
+                        "reset",
+                        "run_primitive",
+                        "run_skill",
+                        "collect_data",
+                        "start_training",
+                        "deploy_policy",
+                        "stop_policy",
+                    ],
                     "description": "Embodied action to execute.",
                 },
                 "setup_id": {
@@ -99,6 +111,39 @@ class EmbodiedControlTool(Tool):
                     "type": "object",
                     "description": "Optional primitive arguments for run_primitive.",
                 },
+                "skill_name": {
+                    "type": "string",
+                    "description": "Required when action is run_skill or collect_data.",
+                },
+                "skill_args": {
+                    "type": "object",
+                    "description": "Optional skill arguments for run_skill.",
+                },
+                "num_episodes": {
+                    "type": "integer",
+                    "default": 10,
+                    "minimum": 1,
+                    "description": "How many episodes to collect when action is collect_data.",
+                },
+                "dataset_path": {
+                    "type": "string",
+                    "description": "Path to the JSONL dataset when action is start_training.",
+                },
+                "algorithm": {
+                    "type": "string",
+                    "default": "default",
+                    "description": "Training algorithm identifier for start_training.",
+                },
+                "epochs": {
+                    "type": "integer",
+                    "default": 100,
+                    "minimum": 1,
+                    "description": "How many epochs to request when action is start_training.",
+                },
+                "checkpoint_path": {
+                    "type": "string",
+                    "description": "Checkpoint path when action is deploy_policy.",
+                },
             },
             "required": ["action"],
         }
@@ -109,6 +154,13 @@ class EmbodiedControlTool(Tool):
         setup_id: str | None = None,
         primitive_name: str | None = None,
         primitive_args: dict[str, Any] | None = None,
+        skill_name: str | None = None,
+        skill_args: dict[str, Any] | None = None,
+        num_episodes: int | None = None,
+        dataset_path: str | None = None,
+        algorithm: str | None = None,
+        epochs: int | None = None,
+        checkpoint_path: str | None = None,
         **kwargs: Any,
     ) -> str:
         if self._session is None:
@@ -119,6 +171,13 @@ class EmbodiedControlTool(Tool):
             setup_id=setup_id,
             primitive_name=primitive_name,
             primitive_args=primitive_args,
+            skill_name=skill_name,
+            skill_args=skill_args,
+            num_episodes=num_episodes,
+            dataset_path=dataset_path,
+            algorithm=algorithm,
+            epochs=epochs,
+            checkpoint_path=checkpoint_path,
             on_progress=self._on_progress,
         )
         return json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True)

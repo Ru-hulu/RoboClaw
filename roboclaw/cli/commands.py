@@ -32,6 +32,7 @@ from rich.text import Text
 from roboclaw import __logo__, __version__
 from roboclaw.config.paths import get_workspace_path
 from roboclaw.config.schema import Config
+from roboclaw.embodied.execution.orchestration.runtime.model import CalibrationPhase
 from roboclaw.utils.helpers import sync_workspace_templates
 
 app = typer.Typer(
@@ -72,15 +73,6 @@ def _print_session_exit_message(session_id: str, *, prefix: str = "Goodbye!") ->
     )
 
 
-def _session_accepts_blank_input(session: object | None) -> bool:
-    if session is None or not hasattr(session, "metadata"):
-        return False
-    raw = getattr(session, "metadata", {}).get("embodied_calibration")
-    if not isinstance(raw, dict):
-        return False
-    return str(raw.get("phase") or "").strip() in {"await_mid_pose_ack", "streaming"}
-
-
 def _session_calibration_phase(session: object | None) -> str | None:
     if session is None or not hasattr(session, "metadata"):
         return None
@@ -89,6 +81,11 @@ def _session_calibration_phase(session: object | None) -> str | None:
         return None
     phase = str(raw.get("phase") or "").strip()
     return phase or None
+
+
+def _session_accepts_blank_input(session: object | None) -> bool:
+    phase = _session_calibration_phase(session)
+    return phase in {CalibrationPhase.AWAIT_MID_POSE_ACK, CalibrationPhase.STREAMING}
 
 
 def _reset_live_progress() -> None:

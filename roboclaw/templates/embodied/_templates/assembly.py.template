@@ -59,12 +59,7 @@ ASSEMBLY = AssemblyBlueprint(
     default_execution_target_id="<target_id>",
     frame_transforms=(),
     tools=(),
-    control_groups=(),
-    safety_zones=(),
-    safety_boundaries=(),
-    failure_domains=(),
-    resource_ownerships=(),
     notes=(
-        "Add sensors, control groups, safety boundaries, and simulator targets only when intake confirms them.",
+        "Add sensors and simulator targets only when intake confirms them.",
     ),
 ).build()

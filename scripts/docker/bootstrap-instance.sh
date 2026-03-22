@@ -51,7 +51,7 @@ DOCKER_ARGS=(
 append_proxy_env_args DOCKER_ARGS
 
 docker run "${DOCKER_ARGS[@]}" \
-  --entrypoint python \
+  --entrypoint python3 \
   "${TARGET_IMAGE}" \
   -c 'from roboclaw.config.loader import get_config_path, load_config, save_config; from roboclaw.config.paths import get_workspace_path; from roboclaw.config.schema import Config; from roboclaw.utils.helpers import sync_workspace_templates; path = get_config_path(); cfg = load_config(path) if path.exists() else Config(); save_config(cfg, path); workspace = get_workspace_path(); workspace.mkdir(parents=True, exist_ok=True); sync_workspace_templates(workspace)'
 mark_instance_bootstrapped "${INSTANCE}" "${PROFILE}"

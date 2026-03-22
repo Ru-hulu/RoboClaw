@@ -623,57 +623,35 @@ def _check_catalog_conflicts(
     )
 
 
+def _catalog_registry(catalog: EmbodiedCatalog, kind: WorkspaceAssetKind) -> tuple[object, str, str]:
+    """Return ``(registry, get_method, register_method)`` for the given kind."""
+    _DISPATCH = {
+        WorkspaceAssetKind.ROBOT: (catalog.robots, "get", "register"),
+        WorkspaceAssetKind.SENSOR: (catalog.sensors, "get", "register"),
+        WorkspaceAssetKind.ASSEMBLY: (catalog.assemblies, "get", "register"),
+        WorkspaceAssetKind.ADAPTER: (catalog.adapters, "get", "register"),
+        WorkspaceAssetKind.DEPLOYMENT: (catalog.deployments, "get", "register"),
+        WorkspaceAssetKind.WORLD: (catalog.simulators, "get_world", "register_world"),
+        WorkspaceAssetKind.SCENARIO: (catalog.simulators, "get_scenario", "register_scenario"),
+    }
+    entry = _DISPATCH.get(kind)
+    if entry is None:
+        raise ValueError(f"Unsupported workspace asset kind '{kind.value}'.")
+    return entry
+
+
 def _is_id_present_in_catalog(catalog: EmbodiedCatalog, asset: _StagedAsset) -> bool:
     try:
-        if asset.kind == WorkspaceAssetKind.ROBOT:
-            catalog.robots.get(asset.asset_id)
-            return True
-        if asset.kind == WorkspaceAssetKind.SENSOR:
-            catalog.sensors.get(asset.asset_id)
-            return True
-        if asset.kind == WorkspaceAssetKind.ASSEMBLY:
-            catalog.assemblies.get(asset.asset_id)
-            return True
-        if asset.kind == WorkspaceAssetKind.ADAPTER:
-            catalog.adapters.get(asset.asset_id)
-            return True
-        if asset.kind == WorkspaceAssetKind.DEPLOYMENT:
-            catalog.deployments.get(asset.asset_id)
-            return True
-        if asset.kind == WorkspaceAssetKind.WORLD:
-            catalog.simulators.get_world(asset.asset_id)
-            return True
-        if asset.kind == WorkspaceAssetKind.SCENARIO:
-            catalog.simulators.get_scenario(asset.asset_id)
-            return True
-    except KeyError:
+        registry, get_method, _ = _catalog_registry(catalog, asset.kind)
+        getattr(registry, get_method)(asset.asset_id)
+        return True
+    except (KeyError, ValueError):
         return False
-    return False
 
 
 def _register_staged_asset(catalog: EmbodiedCatalog, asset: _StagedAsset) -> None:
-    if asset.kind == WorkspaceAssetKind.ROBOT:
-        catalog.robots.register(asset.value)
-        return
-    if asset.kind == WorkspaceAssetKind.SENSOR:
-        catalog.sensors.register(asset.value)
-        return
-    if asset.kind == WorkspaceAssetKind.ASSEMBLY:
-        catalog.assemblies.register(asset.value)
-        return
-    if asset.kind == WorkspaceAssetKind.ADAPTER:
-        catalog.adapters.register(asset.value)
-        return
-    if asset.kind == WorkspaceAssetKind.DEPLOYMENT:
-        catalog.deployments.register(asset.value)
-        return
-    if asset.kind == WorkspaceAssetKind.WORLD:
-        catalog.simulators.register_world(asset.value)
-        return
-    if asset.kind == WorkspaceAssetKind.SCENARIO:
-        catalog.simulators.register_scenario(asset.value)
-        return
-    raise ValueError(f"Unsupported workspace asset kind '{asset.kind.value}'.")
+    registry, _, register_method = _catalog_registry(catalog, asset.kind)
+    getattr(registry, register_method)(asset.value)
 
 
 def _read_asset_id(item: object) -> str | None:

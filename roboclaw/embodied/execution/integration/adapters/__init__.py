@@ -32,14 +32,13 @@ from roboclaw.embodied.execution.integration.adapters.model import (
 )
 from roboclaw.embodied.execution.integration.adapters.protocols import EmbodiedAdapter
 from roboclaw.embodied.execution.integration.adapters.ros2 import (
-    DEFAULT_ROS2_PROFILES,
     PrimitiveAliasResolution,
     PrimitiveAliasSpec,
     PrimitiveServiceSpec,
     Ros2ActionServiceAdapter,
     Ros2EmbodimentProfile,
-    SO101_ROS2_PROFILE,
     get_ros2_profile,
+    list_ros2_profiles,
 )
 from roboclaw.embodied.execution.integration.adapters.registry import AdapterRegistry
 
@@ -77,9 +76,8 @@ __all__ = [
     "PrimitiveServiceSpec",
     "Ros2ActionServiceAdapter",
     "Ros2EmbodimentProfile",
-    "SO101_ROS2_PROFILE",
-    "DEFAULT_ROS2_PROFILES",
     "TimeoutPolicy",
     "VersionConstraint",
     "get_ros2_profile",
+    "list_ros2_profiles",
 ]

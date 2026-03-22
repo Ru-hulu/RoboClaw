@@ -11,11 +11,8 @@ import time
 from typing import Any
 
 from roboclaw.config.paths import resolve_active_serial_device_path
-from roboclaw.embodied.execution.integration.adapters.ros2.profiles import (
-    SO101_ROS2_PROFILE,
-    get_ros2_profile,
-)
-from roboclaw.embodied.execution.integration.control_surfaces.ros2.so101_feetech import So101FeetechRuntime
+from roboclaw.embodied.builtins import get_control_surface_runtime_factory
+from roboclaw.embodied.execution.integration.adapters.ros2.profiles import get_ros2_profile
 
 
 class Ros2ControlSurfaceServer:
@@ -92,13 +89,12 @@ class Ros2ControlSurfaceServer:
             raise ValueError(
                 f"Control-surface ROS2 profile/robot mismatch: profile='{profile.id}' robot='{robot_id}'."
             )
-        if profile.id != SO101_ROS2_PROFILE.id:
-            raise ValueError(
-                f"Control-surface ROS2 server does not support profile '{profile.id}' yet."
-            )
-        return So101FeetechRuntime(
+        runtime_factory = get_control_surface_runtime_factory(profile.id)
+        if runtime_factory is None:
+            raise ValueError(f"Control-surface ROS2 server does not support profile '{profile.id}' yet.")
+        return runtime_factory(
             device_by_id=device_by_id,
-            robot_name=robot_id,
+            robot_id=robot_id,
             calibration_path=calibration_path,
             calibration_id=calibration_id,
         )
@@ -179,13 +175,13 @@ class Ros2ControlSurfaceServer:
         lower = str(exc).lower()
         if "port is in use" in lower:
             return (
-                "The SO101 serial port is still busy. RoboClaw already tried to clear the current robot connection automatically, "
-                "but something else is still using the arm. Close the other program and reply `connect` again."
+                "The robot serial port is still busy. RoboClaw already tried to clear the current robot connection automatically, "
+                "but something else is still using this embodiment. Close the other program and reply `connect` again."
             )
         if "there is no status packet" in lower or "incorrect status packet" in lower:
             return (
-                "RoboClaw could reach the SO101 USB device, but the arm did not answer. "
-                "Please make sure the arm power is on and the USB/serial cable is firmly connected, then reply `connect` again."
+                "RoboClaw could reach the robot USB device, but the embodiment did not answer. "
+                "Please make sure the robot power is on and the USB/serial cable is firmly connected, then reply `connect` again."
             )
         return str(exc)
 
@@ -394,7 +390,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--robot-id", required=True)
     parser.add_argument("--device-by-id", required=True)
     parser.add_argument("--calibration-path")
-    parser.add_argument("--calibration-id", default="so101_real")
+    parser.add_argument("--calibration-id", default="default")
     parser.add_argument("--state-rate-hz", type=float, default=5.0)
     return parser.parse_args()
 

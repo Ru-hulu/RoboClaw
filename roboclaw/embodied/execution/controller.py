@@ -2,20 +2,34 @@
 
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from roboclaw.agent.tools.registry import ToolRegistry
+from roboclaw.embodied.builtins import get_builtin_embodiment_for_robot, list_ros2_profiles
+from roboclaw.embodied.capabilities import diagnose_gap, resolve_available_skills
 from roboclaw.bus.events import InboundMessage, OutboundMessage
 from roboclaw.embodied.catalog import build_catalog
 from roboclaw.embodied.localization import choose_language, localize_text
+from roboclaw.embodied.execution.orchestration.data_collection import collect_episodes
+from roboclaw.embodied.execution.orchestration.inference import (
+    _INFERENCE_SESSIONS,
+    InferenceSession,
+    start_inference,
+    stop_inference,
+)
+from roboclaw.embodied.execution.orchestration.training import TrainingConfig, run_training
+from roboclaw.embodied.execution.orchestration.skills import execute_skill
 from roboclaw.embodied.execution.orchestration.procedures.model import ProcedureKind
 from roboclaw.embodied.execution.orchestration.runtime.executor import (
     ExecutionContext,
     ProcedureExecutionResult,
     ProcedureExecutor,
 )
+from roboclaw.embodied.execution.orchestration.runtime.model import CalibrationPhase
 from roboclaw.embodied.execution.orchestration.runtime.manager import RuntimeManager
 from roboclaw.embodied.onboarding import SETUP_STATE_KEY, SetupOnboardingState, SetupStage, SetupStatus
 from roboclaw.embodied.onboarding.model import PREFERRED_LANGUAGE_KEY
@@ -58,7 +72,10 @@ class EmbodiedAgentSnapshot:
     profile_id: str | None = None
     capability_families: tuple[str, ...] = ()
     supported_primitives: tuple[str, ...] = ()
+    available_primitives: tuple[str, ...] = ()
+    available_skills: tuple[str, ...] = ()
     primitive_alias_examples: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    registered_policies: tuple[str, ...] = ()
     calibration_required: bool | None = None
     calibration_present: bool | None = None
 
@@ -79,9 +96,12 @@ class EmbodiedAgentSnapshot:
             "profile_id": self.profile_id,
             "capability_families": list(self.capability_families),
             "supported_primitives": list(self.supported_primitives),
+            "available_primitives": list(self.available_primitives),
+            "available_skills": list(self.available_skills),
             "primitive_alias_examples": {
                 key: list(values) for key, values in self.primitive_alias_examples.items()
             },
+            "registered_policies": list(self.registered_policies),
             "calibration_required": self.calibration_required,
             "calibration_present": self.calibration_present,
         }
@@ -181,7 +201,7 @@ class EmbodiedExecutionController:
         normalized = " ".join(content.strip().lower().split())
         return any(token in normalized for token in cls._CALIBRATION_REQUEST_HINTS)
 
-    def looks_like_embodied_request(self, content: str) -> bool:
+    def looks_like_embodied_request(self, content: str, catalog: Any | None = None) -> bool:
         """Best-effort embodied intent detector for onboarding interception only."""
         normalized = " ".join(content.strip().lower().split())
         if not normalized:
@@ -190,10 +210,11 @@ class EmbodiedExecutionController:
         if any(token in normalized for token in self._GENERIC_HINTS):
             return True
 
-        try:
-            catalog = build_catalog(self.workspace)
-        except Exception:
-            catalog = build_catalog()
+        if catalog is None:
+            try:
+                catalog = build_catalog(self.workspace)
+            except Exception:
+                catalog = build_catalog()
 
         for robot in catalog.robots.list():
             if robot.id.lower() in normalized or robot.name.lower() in normalized:
@@ -201,9 +222,7 @@ class EmbodiedExecutionController:
             if any(primitive.name.lower() in normalized for primitive in robot.primitives):
                 return True
 
-        from roboclaw.embodied.execution.integration.adapters.ros2.profiles import DEFAULT_ROS2_PROFILES
-
-        for profile in DEFAULT_ROS2_PROFILES:
+        for profile in list_ros2_profiles():
             for alias_spec in profile.primitive_aliases:
                 if alias_spec.primitive_name.lower() in normalized:
                     return True
@@ -236,9 +255,9 @@ class EmbodiedExecutionController:
             session.add_message("assistant", content)
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=content, metadata=msg.metadata or {})
 
-        context = self._build_context(session, setup)
+        context = self._build_context(session, setup, catalog=catalog)
         self._bind_active_setup(session, setup.setup_id)
-        runtime_phase = self.executor.calibration_phase(context.runtime.id)
+        runtime_phase = self.executor.calibration_phase(context)
         if calibration_state and runtime_phase is None:
             session.metadata.pop(EMBODIED_CALIBRATION_STATE_KEY, None)
             content = localize_text(
@@ -261,49 +280,11 @@ class EmbodiedExecutionController:
                 metadata=msg.metadata or {},
             )
         content = msg.content.strip()
-        if not content:
-            result = await self.executor.advance_calibration(context, on_progress=on_progress)
-            self._sync_calibration_state(session, setup_id=setup.setup_id, runtime_id=context.runtime.id, result=result)
-        elif self._looks_like_calibration_request(content):
-            phase = self.executor.calibration_phase(context.runtime.id) or str(calibration_state.get("phase") or "")
-            calibration_path = context.profile.canonical_calibration_path()
-            result = self.executor._so101_calibration_phase_message(
-                context,
-                phase=phase,
-                calibration_path=calibration_path,
-            )
+        if self._looks_like_calibration_request(content):
+            result = self.executor.describe_calibration(context)
         else:
-            phase = self.executor.calibration_phase(context.runtime.id) or str(calibration_state.get("phase") or "")
-            if phase == "await_mid_pose_ack":
-                message = localize_text(
-                    context.preferred_language,
-                    en=(
-                        f"Calibration is pending for setup `{setup.setup_id}`."
-                        " Move the arm to a middle pose, then press Enter to start live calibration."
-                    ),
-                    zh=(
-                        f"setup `{setup.setup_id}` 的标定正在等待继续。"
-                        " 先把机械臂移动到中间位姿，然后按 Enter 开始实时标定。"
-                    ),
-                )
-            else:
-                message = localize_text(
-                    context.preferred_language,
-                    en=(
-                        f"Calibration is already streaming for setup `{setup.setup_id}`."
-                        " Keep moving every joint through its full range of motion, then press Enter to stop and save."
-                    ),
-                    zh=(
-                        f"setup `{setup.setup_id}` 的标定已经在实时采样了。"
-                        " 继续把每个关节跑完整量程，然后按 Enter 停止并保存。"
-                    ),
-                )
-            result = ProcedureExecutionResult(
-                procedure=ProcedureKind.CALIBRATE,
-                ok=False,
-                message=message,
-                details={"calibration_phase": phase},
-            )
+            result = await self.executor.advance_calibration(context, user_input=content, on_progress=on_progress)
+            self._sync_calibration_state(session, setup_id=setup.setup_id, runtime_id=context.runtime.id, result=result)
 
         self._sync_runtime_state(session, setup_id=setup.setup_id, runtime=context.runtime)
         if result.ok and result.procedure == ProcedureKind.CALIBRATE:
@@ -322,9 +303,11 @@ class EmbodiedExecutionController:
         session: Session,
         *,
         setup_id: str | None = None,
+        catalog: Any | None = None,
     ) -> EmbodiedAgentSnapshot:
         """Build the current embodied snapshot for LLM context/tool use."""
-        catalog = build_catalog(self.workspace)
+        if catalog is None:
+            catalog = build_catalog(self.workspace)
         setup, _, candidates = self._resolve_setup(session, catalog, explicit_setup_id=setup_id)
         candidate_summaries = tuple(self._candidate_summary(catalog, item) for item in candidates)
         selected = self._selected_setup_payload(session, catalog, setup)
@@ -347,7 +330,10 @@ class EmbodiedExecutionController:
             profile_id=selected.get("profile_id"),
             capability_families=tuple(selected.get("capability_families", ())),
             supported_primitives=tuple(selected.get("supported_primitives", ())),
+            available_primitives=tuple(selected.get("available_primitives", ())),
+            available_skills=tuple(selected.get("available_skills", ())),
             primitive_alias_examples=selected.get("primitive_alias_examples", {}),
+            registered_policies=tuple(selected.get("registered_policies", ())),
             calibration_required=selected.get("calibration_required"),
             calibration_present=selected.get("calibration_present"),
         )
@@ -360,6 +346,13 @@ class EmbodiedExecutionController:
         setup_id: str | None = None,
         primitive_name: str | None = None,
         primitive_args: dict[str, Any] | None = None,
+        skill_name: str | None = None,
+        skill_args: dict[str, Any] | None = None,
+        num_episodes: int | None = None,
+        dataset_path: str | None = None,
+        algorithm: str | None = None,
+        epochs: int | None = None,
+        checkpoint_path: str | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> EmbodiedToolResult:
         """Execute one strong-constrained embodied action for the agent."""
@@ -402,7 +395,7 @@ class EmbodiedExecutionController:
                 details={},
             )
 
-        context = self._build_context(session, setup)
+        context = self._build_context(session, setup, catalog=catalog)
         self._bind_active_setup(session, setup.setup_id)
         if on_progress:
             await on_progress(f"Embodied action routed to setup `{setup.setup_id}`.")
@@ -435,6 +428,239 @@ class EmbodiedExecutionController:
                 primitive_name=primitive_name,
                 primitive_args=primitive_args,
                 on_progress=on_progress,
+            )
+        elif action == "run_skill":
+            if not skill_name or not skill_name.strip():
+                return EmbodiedToolResult(
+                    ok=False,
+                    action=action,
+                    setup_id=setup.setup_id,
+                    runtime_status=context.runtime.status.value,
+                    message=localize_text(
+                        context.preferred_language,
+                        en="`skill_name` is required when action is `run_skill`.",
+                        zh="当 action 是 `run_skill` 时，必须提供 `skill_name`。",
+                    ),
+                    details={},
+                )
+            builtin = get_builtin_embodiment_for_robot(context.robot.id)
+            skill = next((item for item in getattr(builtin, "skills", ()) if item.name == skill_name), None)
+            if skill is None:
+                return EmbodiedToolResult(
+                    ok=False,
+                    action=action,
+                    setup_id=setup.setup_id,
+                    runtime_status=context.runtime.status.value,
+                    message=localize_text(
+                        context.preferred_language,
+                        en=f"Skill `{skill_name}` is not available for robot `{context.robot.id}`.",
+                        zh=f"机器人 `{context.robot.id}` 不支持 skill `{skill_name}`。",
+                    ),
+                    details={},
+                )
+            gap = diagnose_gap(context.robot.capability_profile(), skill=skill)
+            if gap is not None:
+                missing = ", ".join(gap.missing_capabilities)
+                next_actions = ("collect_data", "start_training") if gap.has_hardware else ("check_robot_hardware", "choose_supported_skill")
+                return EmbodiedToolResult(
+                    ok=False,
+                    action=action,
+                    setup_id=setup.setup_id,
+                    runtime_status=context.runtime.status.value,
+                    message=localize_text(
+                        context.preferred_language,
+                        en=f"Cannot run `{skill.name}`: missing {missing}. {gap.suggestion}.",
+                        zh=f"无法执行 `{skill.name}`：缺少 {missing}。{'硬件能力足够，但还没有对应的已训练策略。要不要先采集数据并训练一个？' if gap.has_hardware else '当前机器人缺少所需硬件。请改用具备这些能力的机器人，或先补齐硬件配置。'}",
+                    ),
+                    suggested_next_actions=next_actions,
+                    details={"missing_capabilities": gap.missing_capabilities, "has_hardware": gap.has_hardware},
+                )
+            result = await execute_skill(
+                self.executor,
+                context,
+                skill,
+                skill_args=skill_args,
+                on_progress=on_progress,
+            )
+        elif action == "collect_data":
+            if not skill_name or not skill_name.strip():
+                return EmbodiedToolResult(
+                    ok=False,
+                    action=action,
+                    setup_id=setup.setup_id,
+                    runtime_status=context.runtime.status.value,
+                    message=localize_text(
+                        context.preferred_language,
+                        en="`skill_name` is required when action is `collect_data`.",
+                        zh="当 action 是 `collect_data` 时，必须提供 `skill_name`。",
+                    ),
+                    details={},
+                )
+            requested_episodes = 10 if num_episodes is None else num_episodes
+            if requested_episodes < 1:
+                return EmbodiedToolResult(
+                    ok=False,
+                    action=action,
+                    setup_id=setup.setup_id,
+                    runtime_status=context.runtime.status.value,
+                    message=localize_text(
+                        context.preferred_language,
+                        en="`num_episodes` must be at least 1 when action is `collect_data`.",
+                        zh="当 action 是 `collect_data` 时，`num_episodes` 必须至少为 1。",
+                    ),
+                    details={},
+                )
+            builtin = get_builtin_embodiment_for_robot(context.robot.id)
+            skill = next((item for item in getattr(builtin, "skills", ()) if item.name == skill_name), None)
+            if skill is None:
+                return EmbodiedToolResult(
+                    ok=False,
+                    action=action,
+                    setup_id=setup.setup_id,
+                    runtime_status=context.runtime.status.value,
+                    message=localize_text(
+                        context.preferred_language,
+                        en=f"Skill `{skill_name}` is not available for robot `{context.robot.id}`.",
+                        zh=f"机器人 `{context.robot.id}` 不支持 skill `{skill_name}`。",
+                    ),
+                    details={},
+                )
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            collection = await collect_episodes(
+                self.executor,
+                context,
+                skill,
+                num_episodes=requested_episodes,
+                output_dir=self.workspace / "embodied" / "datasets" / f"{setup.setup_id}_{skill_name}_{timestamp}",
+                on_progress=on_progress,
+            )
+            self._sync_runtime_state(session, setup_id=setup.setup_id, runtime=context.runtime)
+            return EmbodiedToolResult(
+                ok=collection.ok,
+                action=action,
+                setup_id=setup.setup_id,
+                runtime_status=context.runtime.status.value,
+                message=collection.message,
+                details={
+                    "dataset_path": collection.dataset_path,
+                    "episodes_requested": collection.episodes_requested,
+                    "episodes_completed": collection.episodes_completed,
+                    "episodes_failed": collection.episodes_failed,
+                },
+            )
+        elif action == "start_training":
+            if not dataset_path or not dataset_path.strip():
+                return EmbodiedToolResult(
+                    ok=False,
+                    action=action,
+                    setup_id=setup.setup_id,
+                    runtime_status=context.runtime.status.value,
+                    message=localize_text(
+                        context.preferred_language,
+                        en="`dataset_path` is required when action is `start_training`.",
+                        zh="当 action 是 `start_training` 时，必须提供 `dataset_path`。",
+                    ),
+                    details={},
+                )
+            requested_epochs = 100 if epochs is None else epochs
+            if requested_epochs < 1:
+                return EmbodiedToolResult(
+                    ok=False,
+                    action=action,
+                    setup_id=setup.setup_id,
+                    runtime_status=context.runtime.status.value,
+                    message=localize_text(
+                        context.preferred_language,
+                        en="`epochs` must be at least 1 when action is `start_training`.",
+                        zh="当 action 是 `start_training` 时，`epochs` 必须至少为 1。",
+                    ),
+                    details={},
+                )
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            training = await run_training(
+                TrainingConfig(
+                    dataset_path=dataset_path,
+                    output_dir=str(self.workspace / "embodied" / "checkpoints" / f"{setup.setup_id}_{timestamp}"),
+                    algorithm=algorithm or "default",
+                    epochs=requested_epochs,
+                ),
+                on_progress=on_progress,
+            )
+            self._sync_runtime_state(session, setup_id=setup.setup_id, runtime=context.runtime)
+            return EmbodiedToolResult(
+                ok=training.ok and training.checkpoint_path is not None,
+                action=action,
+                setup_id=setup.setup_id,
+                runtime_status=context.runtime.status.value,
+                message="Training complete! Checkpoint saved." if training.ok and training.checkpoint_path else "Training failed.",
+                details={
+                    "checkpoint_path": training.checkpoint_path,
+                    "epochs_completed": training.epochs_completed,
+                    "training_message": training.message,
+                    **training.details,
+                },
+            )
+        elif action == "deploy_policy":
+            if not checkpoint_path or not checkpoint_path.strip():
+                return EmbodiedToolResult(
+                    ok=False,
+                    action=action,
+                    setup_id=setup.setup_id,
+                    runtime_status=context.runtime.status.value,
+                    message=localize_text(
+                        context.preferred_language,
+                        en="`checkpoint_path` is required when action is `deploy_policy`.",
+                        zh="当 action 是 `deploy_policy` 时，必须提供 `checkpoint_path`。",
+                    ),
+                    details={},
+                )
+            active = _INFERENCE_SESSIONS.get(setup.setup_id)
+            if active is not None and active.running:
+                return EmbodiedToolResult(
+                    ok=False,
+                    action=action,
+                    setup_id=setup.setup_id,
+                    runtime_status=context.runtime.status.value,
+                    message="Policy is already running.",
+                    details={"checkpoint_path": active.checkpoint_path, "steps_completed": active.steps_completed},
+                )
+            deployment = InferenceSession(
+                checkpoint_path=checkpoint_path,
+                setup_id=setup.setup_id,
+                stop_event=asyncio.Event(),
+            )
+            _INFERENCE_SESSIONS[setup.setup_id] = deployment
+            deployment.task = asyncio.create_task(start_inference(deployment, self.executor, context, on_progress))
+            return EmbodiedToolResult(
+                ok=True,
+                action=action,
+                setup_id=setup.setup_id,
+                runtime_status=context.runtime.status.value,
+                message="Policy deployed and running!",
+                details={"checkpoint_path": checkpoint_path},
+            )
+        elif action == "stop_policy":
+            deployment = _INFERENCE_SESSIONS.get(setup.setup_id)
+            if deployment is None:
+                return EmbodiedToolResult(
+                    ok=False,
+                    action=action,
+                    setup_id=setup.setup_id,
+                    runtime_status=context.runtime.status.value,
+                    message="No policy is currently running.",
+                    details={},
+                )
+            result = stop_inference(deployment)
+            if deployment.task is not None:
+                result = await deployment.task
+            self._sync_runtime_state(session, setup_id=setup.setup_id, runtime=context.runtime)
+            return EmbodiedToolResult(
+                ok=result.ok,
+                action=action,
+                setup_id=setup.setup_id,
+                runtime_status=context.runtime.status.value,
+                message=f"Policy stopped after {result.steps_completed} steps.",
+                details={"checkpoint_path": deployment.checkpoint_path, **result.details},
             )
         else:
             return EmbodiedToolResult(
@@ -515,6 +741,9 @@ class EmbodiedExecutionController:
         robot_attachment = assembly.robots[0] if assembly.robots else None
         robot = catalog.robots.get(robot_attachment.robot_id) if robot_attachment is not None else None
         profile = self._resolve_profile(robot.id) if robot is not None else None
+        capability_profile = robot.capability_profile() if robot is not None else None
+        builtin = get_builtin_embodiment_for_robot(robot.id) if robot is not None else None
+        available_skills = resolve_available_skills(capability_profile, builtin.skills) if capability_profile and builtin else ()
         runtime_state = self._runtime_state_for_setup(session, setup)
         calibration_path = profile.canonical_calibration_path() if profile is not None and getattr(profile, "requires_calibration", False) else None
 
@@ -535,13 +764,17 @@ class EmbodiedExecutionController:
             "profile_id": getattr(profile, "id", None),
             "capability_families": tuple(item.value for item in getattr(robot, "capability_families", ())),
             "supported_primitives": tuple(primitive.name for primitive in getattr(robot, "primitives", ())),
+            "available_primitives": tuple(primitive.name for primitive in getattr(robot, "primitives", ())),
+            "available_skills": tuple(skill.name for skill in available_skills),
             "primitive_alias_examples": primitive_alias_examples,
-            "calibration_required": bool(getattr(profile, "requires_calibration", False)) if profile is not None else None,
-            "calibration_present": calibration_path.exists() if calibration_path is not None else None,
+            "registered_policies": (),
+            "calibration_required": bool(getattr(profile, "requires_calibration", False)) if profile is not None and deployment.target_id != "sim" else False,
+            "calibration_present": calibration_path.exists() if calibration_path is not None else (True if deployment.target_id == "sim" else None),
         }
 
-    def _build_context(self, session: Session, setup: ResolvedSetup) -> ExecutionContext:
-        catalog = build_catalog(self.workspace)
+    def _build_context(self, session: Session, setup: ResolvedSetup, catalog: Any | None = None) -> ExecutionContext:
+        if catalog is None:
+            catalog = build_catalog(self.workspace)
         assembly = catalog.assemblies.get(setup.assembly_id)
         deployment = catalog.deployments.get(setup.deployment_id)
         adapter_binding = catalog.adapters.get(setup.adapter_id)
@@ -741,7 +974,7 @@ class EmbodiedExecutionController:
         result: ProcedureExecutionResult,
     ) -> None:
         phase = str(result.details.get("calibration_phase") or "").strip()
-        if phase in {"await_mid_pose_ack", "streaming"}:
+        if phase in {CalibrationPhase.AWAIT_MID_POSE_ACK, CalibrationPhase.STREAMING}:
             session.metadata[EMBODIED_CALIBRATION_STATE_KEY] = {
                 "setup_id": setup_id,
                 "runtime_id": runtime_id,

@@ -1,9 +1,12 @@
 import importlib
+import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
+from roboclaw.embodied.builtins import register_builtin_embodiment
+from roboclaw.embodied.builtins.model import BuiltinEmbodiment
 from roboclaw.embodied import RGB_CAMERA, SO101_ROBOT, build_default_catalog
 from roboclaw.embodied.definition.foundation.schema import (
     CarrierKind,
@@ -13,16 +16,15 @@ from roboclaw.embodied.definition.foundation.schema import (
     TransportKind,
     ValueUnit,
 )
+from roboclaw.embodied.definition.components.robots.model import (
+    PrimitiveSpec,
+    RobotManifest,
+)
+from roboclaw.embodied.execution.integration.adapters.ros2.profiles import Ros2EmbodimentProfile
 from roboclaw.embodied.definition.systems.assemblies import (
     AssemblyBlueprint,
-    ControlGroup,
-    FailureDomain,
     FrameTransform,
-    ResourceLockScope,
-    ResourceOwnership,
     RobotAttachment,
-    SafetyBoundary,
-    SafetyZone,
     ToolAttachment,
     Transform3D,
     compose_assemblies,
@@ -79,12 +81,9 @@ from roboclaw.embodied.execution.observability import (
 from roboclaw.embodied.execution.orchestration.procedures import (
     AdapterProcedureAction,
     CancellationMode,
-    CompensationTrigger,
     DEFAULT_PROCEDURES,
-    IdempotencyMode,
     OrchestratorProcedureAction,
     ProcedureActionTarget,
-    RollbackStrategy,
 )
 from roboclaw.embodied.execution.orchestration.runtime import RuntimeManager, RuntimeStatus
 from roboclaw.embodied.workspace import (
@@ -97,6 +96,7 @@ from roboclaw.embodied.workspace import (
     WorkspaceValidationStage,
     inspect_workspace_assets,
 )
+import roboclaw.embodied.builtins.registry as builtins_registry
 
 
 def _workspace_blueprint() -> AssemblyBlueprint:
@@ -149,54 +149,6 @@ def _workspace_blueprint() -> AssemblyBlueprint:
                 kind="end_effector",
             ),
         ),
-        control_groups=(
-            ControlGroup(
-                id="manipulation",
-                robot_attachment_ids=("primary",),
-                sensor_attachment_ids=("wrist_camera",),
-                mode_hints=("position",),
-            ),
-        ),
-        default_control_group_id="manipulation",
-        safety_zones=(
-            SafetyZone(
-                id="workspace_zone",
-                frame="base_link",
-                min_xyz=(-0.5, -0.5, 0.0),
-                max_xyz=(0.5, 0.5, 0.8),
-            ),
-        ),
-        safety_boundaries=(
-            SafetyBoundary(
-                id="manipulation_safety",
-                control_group_ids=("manipulation",),
-                robot_attachment_ids=("primary",),
-                sensor_attachment_ids=("wrist_camera",),
-                zone_ids=("workspace_zone",),
-                max_linear_speed_mps=0.2,
-                max_joint_speed_scale=0.5,
-            ),
-        ),
-        failure_domains=(
-            FailureDomain(
-                id="arm_cell",
-                robot_attachment_ids=("primary",),
-                sensor_attachment_ids=("wrist_camera",),
-                target_ids=("real",),
-                containment_actions=("stop", "recover"),
-            ),
-        ),
-        resource_ownerships=(
-            ResourceOwnership(
-                id="manipulation_lock",
-                control_group_id="manipulation",
-                resource_ids=("joint_controller", "camera_stream"),
-                lock_scope=ResourceLockScope.EXCLUSIVE,
-                robot_attachment_ids=("primary",),
-                sensor_attachment_ids=("wrist_camera",),
-                failure_domain_id="arm_cell",
-            ),
-        ),
     )
 
 
@@ -210,6 +162,66 @@ def test_embodied_catalog_contains_reusable_definitions_only() -> None:
     assert catalog.adapters.for_assembly("workspace_so101") == ()
     assert catalog.deployments.for_assembly("workspace_so101") == ()
     assert RGB_CAMERA.supports_intrinsics is True
+
+
+def test_default_catalog_discovers_builtin_registrations(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        builtins_registry,
+        "_BUILTINS_BY_ID",
+        dict(builtins_registry._BUILTINS_BY_ID),
+    )
+    monkeypatch.setattr(
+        builtins_registry,
+        "_BUILTINS_BY_ROBOT_ID",
+        dict(builtins_registry._BUILTINS_BY_ROBOT_ID),
+    )
+    register_builtin_embodiment(
+        BuiltinEmbodiment(
+            id="demo_arm",
+            robot=RobotManifest(
+                id="demo_arm",
+                name="Demo Arm",
+                description="Fake built-in robot for registry discovery tests.",
+                robot_type=RobotType.ARM,
+                capability_families=SO101_ROBOT.capability_families,
+                primitives=(
+                    PrimitiveSpec(
+                        name="demo_ping",
+                        kind=SO101_ROBOT.primitives[0].kind,
+                        capability_family=SO101_ROBOT.primitives[0].capability_family,
+                        command_mode=SO101_ROBOT.primitives[0].command_mode,
+                        description="Demo primitive.",
+                    ),
+                ),
+                observation_schema=SO101_ROBOT.observation_schema,
+                health_schema=SO101_ROBOT.health_schema,
+            ),
+            ros2_profile=Ros2EmbodimentProfile(
+                id="demo_arm_ros2_standard",
+                robot_id="demo_arm",
+            ),
+            onboarding_aliases=("demo arm",),
+        )
+    )
+
+    catalog = build_default_catalog()
+
+    assert catalog.robots.get("demo_arm").name == "Demo Arm"
+
+
+def test_pyproject_no_longer_packages_vendored_scservo_sdk() -> None:
+    root = Path(__file__).resolve().parents[1]
+    with open(root / "pyproject.toml", "rb") as fh:
+        data = tomllib.load(fh)
+
+    wheel = data["tool"]["hatch"]["build"]["targets"]["wheel"]
+    include = data["tool"]["hatch"]["build"]["include"]
+    sdist = data["tool"]["hatch"]["build"]["targets"]["sdist"]["include"]
+
+    assert "scservo_sdk" not in wheel["packages"]
+    assert not any("scservo_sdk" in item for item in include)
+    assert not any("scservo_sdk" in item for item in sdist)
+    assert not (root / "scservo_sdk").exists()
 
 
 def test_control_surface_profile_contract_is_machine_checkable() -> None:
@@ -290,8 +302,6 @@ def test_workspace_blueprint_can_be_composed_into_a_variant() -> None:
         ),
     )
     assert composed.execution_target("real").carrier == CarrierKind.REAL
-    assert composed.default_control_group_id == "manipulation"
-    assert composed.control_group().id == "manipulation"
     assert composed.frame_transforms[0].child_frame == "base_link"
     assert composed.tools[0].attachment_id == "primary_tool"
 
@@ -340,14 +350,8 @@ def test_assembly_topology_contract_is_machine_checkable() -> None:
 
     assert assembly.default_execution_target_id == "real"
     assert assembly.execution_target().id == "real"
-    assert assembly.default_control_group_id == "manipulation"
-    assert assembly.control_group().robot_attachment_ids == ("primary",)
     assert assembly.tools[0].robot_attachment_id == "primary"
     assert assembly.frame_transforms[1].parent_frame == "base_link"
-    assert assembly.safety_zones[0].id == "workspace_zone"
-    assert assembly.safety_boundaries[0].zone_ids == ("workspace_zone",)
-    assert assembly.failure_domains[0].containment_actions == ("stop", "recover")
-    assert assembly.resource_ownerships[0].control_group_id == "manipulation"
 
 
 def test_adapter_lifecycle_contract_is_machine_checkable() -> None:
@@ -548,9 +552,6 @@ def test_procedure_contract_is_machine_checkable() -> None:
     assert connect_step.timeout_s == 30.0
     assert connect_step.retry_policy.max_retries == 2
     assert connect.cancellation_policy.mode == CancellationMode.SAFE_POINT
-    assert connect.rollback_strategy == RollbackStrategy.REVERSE_COMPENSATION
-    assert connect.idempotency_policy.mode == IdempotencyMode.BEST_EFFORT
-    assert connect.idempotency_policy.key_fields == ("deployment_id", "target_id")
     select_target_step = next(step for step in connect.steps if step.id == "select_target")
     assert select_target_step.action.target == ProcedureActionTarget.ORCHESTRATOR
     assert select_target_step.action.name == OrchestratorProcedureAction.RESOLVE_TARGET.value
@@ -562,17 +563,10 @@ def test_procedure_contract_is_machine_checkable() -> None:
     assert connect_step.cancellation.cancel_action is not None
     assert connect_step.cancellation.cancel_action.target == ProcedureActionTarget.ADAPTER
     assert connect_step.cancellation.cancel_action.name == AdapterProcedureAction.DISCONNECT.value
-    assert connect_step.compensation is not None
-    assert connect_step.compensation.action.target == ProcedureActionTarget.ADAPTER
-    assert connect_step.compensation.action.name == AdapterProcedureAction.DISCONNECT.value
-    assert CompensationTrigger.ON_CANCEL in connect_step.compensation.triggers
-    assert connect_step.idempotency is not None
-    assert connect_step.idempotency.mode == IdempotencyMode.BEST_EFFORT
     assert connect.operator_interventions[0].step_id == "connect"
 
     reset = next(procedure for procedure in DEFAULT_PROCEDURES if procedure.id == "reset_default")
     assert reset.cancellation_policy.mode == CancellationMode.NON_CANCELLABLE
-    assert reset.idempotency_policy.mode == IdempotencyMode.STRICT
 
 
 def test_telemetry_contract_is_machine_checkable() -> None:

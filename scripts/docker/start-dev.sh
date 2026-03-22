@@ -32,8 +32,8 @@ CONTAINER_NAME="$(dev_container_name "${INSTANCE}" "${PROFILE}")"
 TARGET_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "${TARGET_IMAGE}")"
 AUTH_PATH="$(host_codex_auth_path || true)"
 OAUTH_CLI_KIT_AUTH_DIR="$(host_oauth_cli_kit_auth_dir || true)"
-SOURCE_PYTHONPATH="/roboclaw-source:/usr/local/lib/python${ROBOCLAW_PYTHON_VERSION}/dist-packages:/app"
-CONTROL_SOURCE_PYTHONPATH="/roboclaw-source:/app:/usr/lib/python3/dist-packages"
+SOURCE_PYTHONPATH="/roboclaw-source:/app"
+CONTROL_SOURCE_PYTHONPATH="/roboclaw-source:/app"
 
 DOCKER_ARGS=(
   -d

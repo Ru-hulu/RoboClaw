@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import importlib.util
 import os
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -303,8 +304,12 @@ class So101FeetechRuntime:
 
     @staticmethod
     def _ensure_scservo_sdk() -> None:
-        if importlib.util.find_spec("scservo_sdk") is not None:
-            return
+        try:
+            if "scservo_sdk" in sys.modules or importlib.util.find_spec("scservo_sdk") is not None:
+                return
+        except ValueError:
+            if "scservo_sdk" in sys.modules:
+                return
         raise ModuleNotFoundError(
             "scservo_sdk is unavailable. Install the RoboClaw SO101 Python dependency bundle before launching the ROS2 control-surface server."
         )
@@ -400,6 +405,7 @@ class So101CalibrationMonitor:
         return self.snapshot_observed()
 
     def snapshot_observed(self) -> So101CalibrationSnapshot:
+        """Snapshot that always updates observed min/max tracking."""
         if self._bus is None:
             raise RuntimeError("Calibration monitor is not connected.")
 
@@ -419,6 +425,34 @@ class So101CalibrationMonitor:
                     range_min_raw=self._observed_mins.get(joint_name),
                     position_raw=position,
                     range_max_raw=self._observed_maxs.get(joint_name),
+                )
+            )
+        return So101CalibrationSnapshot(
+            device_by_id=self.device_by_id,
+            resolved_device=str(self._resolved_device_path) if self._resolved_device_path is not None else None,
+            rows=tuple(rows),
+        )
+
+    def snapshot(self) -> So101CalibrationSnapshot:
+        """Snapshot without updating tracking — uses position as min/max fallback."""
+        if self._observed_mins or self._observed_maxs:
+            return self.snapshot_observed()
+        if self._bus is None:
+            raise RuntimeError("Calibration monitor is not connected.")
+
+        rows: list[So101CalibrationRow] = []
+        for joint_name, servo_id in DEFAULT_SERVO_IDS.items():
+            try:
+                position = self._bus.read_position(servo_id)
+            except Exception:
+                position = None
+            rows.append(
+                So101CalibrationRow(
+                    joint_name=joint_name,
+                    servo_id=servo_id,
+                    range_min_raw=position,
+                    position_raw=position,
+                    range_max_raw=position,
                 )
             )
         return So101CalibrationSnapshot(
@@ -448,33 +482,6 @@ class So101CalibrationMonitor:
                 "range_max": int(self._observed_maxs[joint_name]),
             }
         return payload
-
-    def snapshot(self) -> So101CalibrationSnapshot:
-        if self._observed_mins or self._observed_maxs:
-            return self.snapshot_observed()
-        if self._bus is None:
-            raise RuntimeError("Calibration monitor is not connected.")
-
-        rows: list[So101CalibrationRow] = []
-        for joint_name, servo_id in DEFAULT_SERVO_IDS.items():
-            try:
-                position = self._bus.read_position(servo_id)
-            except Exception:
-                position = None
-            rows.append(
-                So101CalibrationRow(
-                    joint_name=joint_name,
-                    servo_id=servo_id,
-                    range_min_raw=position,
-                    position_raw=position,
-                    range_max_raw=position,
-                )
-            )
-        return So101CalibrationSnapshot(
-            device_by_id=self.device_by_id,
-            resolved_device=str(self._resolved_device_path) if self._resolved_device_path is not None else None,
-            rows=tuple(rows),
-        )
 
 
 __all__ = [

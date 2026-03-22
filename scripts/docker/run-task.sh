@@ -38,7 +38,7 @@ DOCKER_ARGS=(
   -e ROBOCLAW_WORKSPACE_PATH=/roboclaw-instance/workspace
   -e ROBOCLAW_ROS2_NAMESPACE_PREFIX="$(ros2_namespace_prefix "${INSTANCE}" "${PROFILE}")"
   -e ROBOCLAW_ROS2_CONTROL_PYTHON="/usr/bin/python3"
-  -e ROBOCLAW_ROS2_CONTROL_PYTHONPATH="/app:/usr/lib/python3/dist-packages"
+  -e ROBOCLAW_ROS2_CONTROL_PYTHONPATH="/app"
   -v "$(instance_dir "${INSTANCE}" "${PROFILE}"):/roboclaw-instance"
 )
 append_proxy_env_args DOCKER_ARGS

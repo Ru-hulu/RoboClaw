@@ -57,6 +57,7 @@ class SimulatorKind(StrEnum):
 class TransportKind(StrEnum):
     """Transport boundary between RoboClaw and the execution target."""
 
+    DIRECT = "direct"
     ROS2 = "ros2"
 
 

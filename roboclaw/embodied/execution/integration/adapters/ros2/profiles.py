@@ -1,8 +1,8 @@
-"""ROS2 embodiment profiles for control-surface execution."""
+"""ROS2 embodiment profile types and lookup helpers."""
 
 from __future__ import annotations
 
-import inspect
+import re
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,13 +29,6 @@ def _default_control_pythonpath() -> str:
         import roboclaw
 
         add(str(Path(inspect.getfile(roboclaw)).resolve().parent.parent))
-    except Exception:
-        pass
-
-    try:
-        import scservo_sdk
-
-        add(str(Path(inspect.getfile(scservo_sdk)).resolve().parent.parent))
     except Exception:
         pass
 
@@ -104,6 +97,8 @@ class Ros2EmbodimentProfile:
     control_surface_server_module: str | None = None
     calibration_robot_name: str | None = None
     control_default_calibration_id: str | None = None
+    calibration_driver_id: str | None = None
+    probe_provider_id: str | None = None
     notes: tuple[str, ...] = field(default_factory=tuple)
 
     @property
@@ -190,74 +185,12 @@ class Ros2EmbodimentProfile:
             command.append(f"--calibration-id {shlex.quote(self.control_default_calibration_id)}")
         return " ".join(command)
 
+def list_ros2_profiles() -> tuple[Ros2EmbodimentProfile, ...]:
+    """List all built-in ROS2 profiles."""
 
-SO101_ROS2_PROFILE = Ros2EmbodimentProfile(
-    id="so101_ros2_standard",
-    robot_id="so101",
-    primitive_aliases=(
-        PrimitiveAliasSpec(
-            primitive_name="gripper_open",
-            aliases=(
-                "打开夹爪",
-                "张开夹爪",
-                "open gripper",
-                "open the gripper",
-            ),
-        ),
-        PrimitiveAliasSpec(
-            primitive_name="gripper_close",
-            aliases=(
-                "闭合夹爪",
-                "关闭夹爪",
-                "夹住",
-                "close gripper",
-                "close the gripper",
-            ),
-        ),
-        PrimitiveAliasSpec(
-            primitive_name="go_named_pose",
-            aliases=(
-                "回到 home",
-                "回到原点",
-                "回到初始位",
-                "go home",
-                "go to home",
-            ),
-            default_args={"name": "home"},
-        ),
-    ),
-    primitive_services=(
-        PrimitiveServiceSpec(
-            primitive_name="gripper_open",
-            service_name="primitive_gripper_open",
-        ),
-        PrimitiveServiceSpec(
-            primitive_name="gripper_close",
-            service_name="primitive_gripper_close",
-        ),
-        PrimitiveServiceSpec(
-            primitive_name="go_named_pose",
-            service_name="primitive_go_home",
-        ),
-    ),
-    auto_probe_serial=True,
-    control_surface_server_module="roboclaw.embodied.execution.integration.control_surfaces.ros2.control_surface",
-    calibration_robot_name="so101",
-    control_default_calibration_id="so101_real",
-    notes=(
-        "Control-surface profile for a ROS2-backed SO101 setup.",
-        "Natural-language aliases stay in framework code so workspace assets remain setup-specific only.",
-        "Primitive execution can fall back to profile-declared ROS2 services when no generic action surface exists.",
-    ),
-)
+    from roboclaw.embodied.builtins import list_ros2_profiles as _list_ros2_profiles
 
-
-DEFAULT_ROS2_PROFILES = (
-    SO101_ROS2_PROFILE,
-)
-
-_PROFILES_BY_ID = {profile.id: profile for profile in DEFAULT_ROS2_PROFILES}
-_PROFILES_BY_ROBOT = {profile.robot_id: profile for profile in DEFAULT_ROS2_PROFILES}
+    return tuple(_list_ros2_profiles())
 
 
 def get_ros2_profile(profile_or_robot_id: str | None) -> Ros2EmbodimentProfile | None:
@@ -265,18 +198,16 @@ def get_ros2_profile(profile_or_robot_id: str | None) -> Ros2EmbodimentProfile |
 
     if profile_or_robot_id is None:
         return None
-    normalized = profile_or_robot_id.strip().lower()
-    if not normalized:
-        return None
-    return _PROFILES_BY_ID.get(normalized) or _PROFILES_BY_ROBOT.get(normalized)
+    from roboclaw.embodied.builtins import get_ros2_profile_from_builtins
+
+    return get_ros2_profile_from_builtins(profile_or_robot_id)
 
 
 __all__ = [
-    "DEFAULT_ROS2_PROFILES",
     "PrimitiveAliasResolution",
     "PrimitiveAliasSpec",
     "PrimitiveServiceSpec",
     "Ros2EmbodimentProfile",
-    "SO101_ROS2_PROFILE",
     "get_ros2_profile",
+    "list_ros2_profiles",
 ]

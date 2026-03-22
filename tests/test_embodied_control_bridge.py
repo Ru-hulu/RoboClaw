@@ -135,6 +135,14 @@ def test_probe_servo_register_uses_open_port_once(monkeypatch: pytest.MonkeyPatc
     ]
 
 
+def test_so101_runtime_missing_sdk_points_to_docs(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delitem(sys.modules, "scservo_sdk", raising=False)
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: None if name == "scservo_sdk" else object())
+
+    with pytest.raises(ModuleNotFoundError, match="scservo_sdk is unavailable"):
+        So101FeetechRuntime._ensure_scservo_sdk()
+
+
 def test_probe_servo_register_uses_resolved_host_device_for_by_id(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[str] = []
 

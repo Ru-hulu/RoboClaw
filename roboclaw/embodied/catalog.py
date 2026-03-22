@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from roboclaw.embodied.definition.components.robots import RobotRegistry, SO101_ROBOT
+from roboclaw.embodied.builtins import list_builtin_embodiments
+from roboclaw.embodied.definition.components.robots import RobotRegistry
 from roboclaw.embodied.definition.components.sensors import RGB_CAMERA, SensorRegistry
 from roboclaw.embodied.definition.systems.assemblies import AssemblyRegistry
 from roboclaw.embodied.definition.systems.deployments import DeploymentRegistry
@@ -48,7 +49,8 @@ def build_default_catalog() -> EmbodiedCatalog:
     """
 
     robots = RobotRegistry()
-    robots.register(SO101_ROBOT)
+    for embodiment in list_builtin_embodiments():
+        robots.register(embodiment.robot)
 
     sensors = SensorRegistry()
     sensors.register(RGB_CAMERA)
