@@ -38,10 +38,20 @@ class _Executor:
         return self.adapter
 
 
+class _FakePolicy:
+    def predict(self, values):
+        return {key: 0.0 for key, value in values.items() if isinstance(value, (int, float))}
+
+
+def _mock_load_policy(monkeypatch):
+    monkeypatch.setattr("roboclaw.embodied.execution.orchestration.inference._load_policy", lambda _path: _FakePolicy())
+
+
 @pytest.mark.asyncio
 async def test_start_inference_executes_policy_steps(monkeypatch: pytest.MonkeyPatch) -> None:
     original_sleep = asyncio.sleep
     monkeypatch.setattr("roboclaw.embodied.execution.orchestration.inference.asyncio.sleep", lambda _: original_sleep(0))
+    _mock_load_policy(monkeypatch)
     session = InferenceSession(checkpoint_path="policy.ckpt", setup_id="demo")
     adapter = _Adapter(session, stop_after=3)
     result = await start_inference(session, _Executor(adapter), SimpleNamespace(runtime=SimpleNamespace(status=RuntimeStatus.READY, last_error=None)))
@@ -51,9 +61,20 @@ async def test_start_inference_executes_policy_steps(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
+async def test_start_inference_fails_on_bad_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Policy load errors should propagate, not silently fall back to zero actions."""
+    session = InferenceSession(checkpoint_path="nonexistent.ckpt", setup_id="demo")
+    adapter = _Adapter(session)
+    result = await start_inference(session, _Executor(adapter), SimpleNamespace(runtime=SimpleNamespace(status=RuntimeStatus.READY, last_error=None)))
+    assert result.ok is False
+    assert "Failed to load policy" in result.message
+
+
+@pytest.mark.asyncio
 async def test_stop_inference_stops_the_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     original_sleep = asyncio.sleep
     monkeypatch.setattr("roboclaw.embodied.execution.orchestration.inference.asyncio.sleep", lambda _: original_sleep(0))
+    _mock_load_policy(monkeypatch)
     session = InferenceSession(checkpoint_path="policy.ckpt", setup_id="demo")
     task = asyncio.create_task(start_inference(session, _Executor(_Adapter(session)), SimpleNamespace(runtime=SimpleNamespace(status=RuntimeStatus.READY, last_error=None))))
     while session.steps_completed < 2:
