@@ -721,10 +721,7 @@ class Ros2ActionServiceAdapter:
             )
         else:
             prefix_parts.append(
-                "for setup in /opt/ros/*/setup.bash; do "
-                "[ -f \"$setup\" ] || continue; "
-                "source \"$setup\" >/dev/null 2>&1 && break; "
-                "done; "
+                "source /opt/ros/*/setup.bash >/dev/null 2>&1"
             )
         source_command = str(self.deployment.connection.get("source_command", "")).strip()
         if source_command:
@@ -805,7 +802,18 @@ class Ros2ActionServiceAdapter:
     @staticmethod
     def _looks_like_failure(output: str) -> bool:
         lowered = output.strip().lower()
-        return lowered.startswith("error") or "exit code:" in lowered or "stderr:" in lowered
+        if lowered.startswith("error"):
+            return True
+        if "exit code:" in lowered:
+            return True
+        # Only treat stderr as failure if it contains actual error indicators,
+        # not just warnings from bash or ROS2 init
+        if "stderr:" in lowered:
+            stderr_lines = [l for l in output.splitlines() if l.strip().lower().startswith("stderr:")]
+            stderr_text = " ".join(stderr_lines).lower()
+            if "error" in stderr_text or "not found" in stderr_text or "no such" in stderr_text:
+                return True
+        return False
 
 
 __all__ = ["Ros2ActionServiceAdapter"]
