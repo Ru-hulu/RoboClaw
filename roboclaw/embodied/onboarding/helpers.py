@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import re
+import json
+import shlex
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -114,11 +116,26 @@ def resolved_ros2_distro(state: SetupOnboardingState) -> str | None:
 
 
 def launch_command(state: SetupOnboardingState) -> str | None:
+    facts = state.detected_facts
+    if facts.get("simulation_requested") is True:
+        model_path = str(facts.get("sim_model_path") or "").strip()
+        if not model_path:
+            return None
+        namespace = ros2_namespace(state)
+        joint_mapping = json.dumps(facts.get("sim_joint_mapping", {}) or {}, ensure_ascii=True, sort_keys=True)
+        return " ".join(
+            [
+                "python -m roboclaw.embodied.simulation.mujoco_ros2_node",
+                f"--model-path {shlex.quote(model_path)}",
+                f"--namespace {shlex.quote(namespace)}",
+                f"--joint-mapping {shlex.quote(joint_mapping)}",
+                "--viewer-port 9878",
+            ]
+        )
     if not state.robot_attachments:
         return None
     primary_robot = state.robot_attachments[0]["robot_id"]
     profile = primary_profile(state)
-    facts = state.detected_facts
     device_by_id = str(facts.get("serial_device_by_id") or "").strip()
     if profile is None or not device_by_id:
         return None
@@ -135,7 +152,8 @@ def ros2_namespace(state: SetupOnboardingState) -> str:
     if not prefix.startswith("/"):
         prefix = f"/{prefix}"
     prefix = re.sub(r"[^A-Za-z0-9_/]", "_", prefix).rstrip("/") or "/roboclaw"
-    return f"{prefix}/{state.assembly_id}/real"
+    target = "sim" if state.detected_facts.get("simulation_requested") is True else "real"
+    return f"{prefix}/{state.assembly_id}/{target}"
 
 
 def asset_summary(state: SetupOnboardingState) -> str:

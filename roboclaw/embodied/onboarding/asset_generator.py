@@ -332,9 +332,10 @@ class AssetGenerator:
             [
                 "        'transport': 'ros2',",
                 "        'profile_id': 'mujoco_sim',",
-                f"        'namespace': '/roboclaw/{state.assembly_id}/sim',",
+                f"        'namespace': {namespace!r},",
                 f"        'model_path': {facts.get('sim_model_path')!r},",
                 f"        'joint_mapping': {(facts.get('sim_joint_mapping') or {})!r},",
+                "        'viewer_port': 9878,",
             ]
             if is_sim
             else

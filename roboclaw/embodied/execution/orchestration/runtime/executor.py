@@ -163,11 +163,16 @@ class ProcedureExecutor:
 
         context.runtime.status = RuntimeStatus.READY
         context.runtime.last_error = None
+        details = {"probe": probe.details, "target_id": context.target.id}
+        if context.target.id == "sim":
+            viewer_port = (context.deployment.connection or {}).get("viewer_port", 9878)
+            details["viewer_url"] = f"http://0.0.0.0:{viewer_port}"
+            details["viewer_message"] = "Simulation viewer available. Open the URL in a browser to see the robot."
         return ProcedureExecutionResult(
             procedure=ProcedureKind.CONNECT,
             ok=True,
             message=f"Connected setup `{context.setup_id}` on target `{context.target.id}`.",
-            details={"probe": probe.details, "target_id": context.target.id},
+            details=details,
         )
 
     async def execute_move(
