@@ -40,7 +40,7 @@ def test_tool_schema() -> None:
     action_schema = params["properties"]["action"]
     assert action_schema["type"] == "string"
     expected_actions = [
-        "doctor", "calibrate", "teleoperate", "record",
+        "doctor", "identify", "calibrate", "teleoperate", "record",
         "train", "run_policy", "job_status",
         "setup_show", "set_arm", "remove_arm", "set_camera", "remove_camera",
     ]

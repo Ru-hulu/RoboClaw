@@ -38,6 +38,21 @@ def scan_serial_ports() -> list[dict[str, str]]:
     return ports
 
 
+def suppress_stderr() -> int:
+    """Redirect stderr to /dev/null. Returns saved fd for restore_stderr."""
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    saved = os.dup(2)
+    os.dup2(devnull, 2)
+    os.close(devnull)
+    return saved
+
+
+def restore_stderr(saved: int) -> None:
+    """Restore stderr from saved fd."""
+    os.dup2(saved, 2)
+    os.close(saved)
+
+
 def scan_cameras() -> list[dict[str, str | int]]:
     """Scan cameras, return list with by_path, by_id, dev, resolution."""
     try:
@@ -45,17 +60,13 @@ def scan_cameras() -> list[dict[str, str | int]]:
     except ImportError:
         return []
 
-    devnull = os.open(os.devnull, os.O_WRONLY)
-    saved_stderr = os.dup(2)
-    os.dup2(devnull, 2)
-    os.close(devnull)
+    saved = suppress_stderr()
     try:
         by_path = _read_symlink_map("/dev/v4l/by-path")
         by_id = _read_symlink_map("/dev/v4l/by-id")
         return _probe_cameras(cv2, by_path, by_id)
     finally:
-        os.dup2(saved_stderr, 2)
-        os.close(saved_stderr)
+        restore_stderr(saved)
 
 
 def _probe_cameras(cv2, by_path: dict, by_id: dict) -> list[dict[str, str | int]]:

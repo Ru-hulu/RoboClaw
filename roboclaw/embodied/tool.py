@@ -1,6 +1,7 @@
 """Embodied tool — bridges agent to the embodied robotics layer."""
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,7 @@ from roboclaw.agent.tools.base import Tool
 
 _ACTIONS = [
     "doctor",
+    "identify",
     "calibrate",
     "teleoperate",
     "record",
@@ -144,6 +146,8 @@ class EmbodiedTool(Tool):
 
         if action == "doctor":
             return await self._do_doctor(setup)
+        if action == "identify":
+            return await self._do_identify(setup)
         if action == "calibrate":
             return await self._do_calibrate(setup)
         if action == "teleoperate":
@@ -216,6 +220,20 @@ class EmbodiedTool(Tool):
 
         result = await self._run(LocalLeRobotRunner(), SO101Controller().doctor())
         return result + f"\n\nCurrent setup:\n{json.dumps(setup, indent=2, ensure_ascii=False)}"
+
+    async def _do_identify(self, setup: dict) -> str:
+        from roboclaw.embodied.runner import LocalLeRobotRunner
+
+        if not self._tty_handoff:
+            return _NO_TTY_MSG
+        ports = setup.get("scanned_ports", [])
+        if not ports:
+            return "No serial ports detected. Run onboard first."
+        argv = [sys.executable, "-m", "roboclaw.embodied.identify", json.dumps(ports)]
+        rc = await self._run_tty(LocalLeRobotRunner(), argv, "identify-arms")
+        if rc == 0:
+            return "Arm identification complete. Use setup_show to see results."
+        return f"Arm identification failed (exit {rc})."
 
     async def _do_calibrate(self, setup: dict) -> str:
         from roboclaw.embodied.embodiment.so101 import SO101Controller
