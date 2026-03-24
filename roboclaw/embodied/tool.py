@@ -240,16 +240,14 @@ class EmbodiedTool(Tool):
         return follower, leader
 
     def _resolve_cameras(self, setup: dict) -> dict[str, dict]:
-        """Convert setup cameras to LeRobot camera format {name: {type, index}}."""
-        import re
+        """Convert setup cameras to LeRobot camera format {name: {type, index_or_path}}."""
         cameras = setup.get("cameras", {})
         result = {}
         for name, cam in cameras.items():
-            dev = cam.get("dev", "")
-            m = re.match(r"/dev/video(\d+)$", dev)
-            if not m:
+            path = cam.get("by_path") or cam.get("dev", "")
+            if not path:
                 continue
-            result[name] = {"type": "opencv", "index": int(m.group(1))}
+            result[name] = {"type": "opencv", "index_or_path": path}
         return result
 
     @staticmethod

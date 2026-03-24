@@ -96,9 +96,12 @@ class SO101Controller:
             return "robot"
         raise ValueError(f"Unsupported arm type: {arm_type}")
 
-    def _arm_args(self, prefix: str, arm_type: str, port: str, cal_dir: str) -> list[str]:
-        return [
+    def _arm_args(self, prefix: str, arm_type: str, port: str, cal_dir: str, arm_id: str = "") -> list[str]:
+        args = [
             f"--{prefix}.type={arm_type}",
             f"--{prefix}.port={port}",
             f"--{prefix}.calibration_dir={Path(cal_dir).expanduser()}",
         ]
+        if arm_id:
+            args.append(f"--{prefix}.id={arm_id}")
+        return args

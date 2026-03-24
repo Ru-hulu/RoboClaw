@@ -319,7 +319,7 @@ def onboard():
         console.print("[dim]Scanning hardware...[/dim]")
         setup = create_setup_with_scan()
         n_ports = len(setup.get("scanned_ports", []))
-        n_cameras = len(setup.get("cameras", []))
+        n_cameras = len(setup.get("scanned_cameras", []))
         console.print(f"[green]✓[/green] Embodied setup created ({n_ports} serial port(s), {n_cameras} camera(s) detected)")
 
     console.print(f"\n{__logo__} RoboClaw is ready!")
