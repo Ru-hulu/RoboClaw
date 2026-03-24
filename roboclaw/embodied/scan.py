@@ -16,6 +16,8 @@ def scan_serial_ports() -> list[dict[str, str]]:
     for entry in sorted(by_id_dir.iterdir()):
         if entry.is_symlink():
             target = os.path.realpath(str(entry))
+            if not os.path.exists(target):
+                continue
             ports.append({"id": entry.name, "path": str(entry), "target": target})
     return ports
 
@@ -27,23 +29,29 @@ def scan_cameras() -> list[dict[str, str | int]]:
     except ImportError:
         return []
 
-    prev_level = os.environ.get("OPENCV_LOG_LEVEL", "")
-    os.environ["OPENCV_LOG_LEVEL"] = "SILENT"
+    # Suppress V4L2/obsensor stderr noise during probing
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    saved_stderr = os.dup(2)
+    os.dup2(devnull, 2)
+    os.close(devnull)
     try:
+        import re
         devices = sorted(glob.glob("/dev/video*"))
         cameras = []
         for dev in devices:
-            idx = int(dev.replace("/dev/video", ""))
-            cap = cv2.VideoCapture(idx)
-            if not cap.isOpened():
+            m = re.match(r"/dev/video(\d+)$", dev)
+            if not m:
                 continue
-            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            cap.release()
-            cameras.append({"id": dev, "width": w, "height": h})
+            cap = cv2.VideoCapture(int(m.group(1)))
+            try:
+                if not cap.isOpened():
+                    continue
+                w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                cameras.append({"id": dev, "width": w, "height": h})
+            finally:
+                cap.release()
         return cameras
     finally:
-        if prev_level:
-            os.environ["OPENCV_LOG_LEVEL"] = prev_level
-        else:
-            os.environ.pop("OPENCV_LOG_LEVEL", None)
+        os.dup2(saved_stderr, 2)
+        os.close(saved_stderr)

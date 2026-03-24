@@ -56,10 +56,12 @@ def create_setup_with_scan(path: Path = SETUP_PATH) -> dict[str, Any]:
 
 
 def ensure_setup(path: Path = SETUP_PATH) -> dict[str, Any]:
-    """Load setup.json if exists, otherwise create with defaults and return."""
+    """Load setup.json if exists, otherwise create with defaults (no scan) and return."""
     if path.exists():
         return load_setup(path)
-    return create_setup_with_scan(path)
+    defaults = copy.deepcopy(_DEFAULT_SETUP)
+    save_setup(defaults, path)
+    return defaults
 
 
 def update_setup(updates: dict[str, Any], path: Path = SETUP_PATH) -> dict[str, Any]:
