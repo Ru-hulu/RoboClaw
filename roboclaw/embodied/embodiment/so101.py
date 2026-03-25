@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 
 
 class SO101Controller:
@@ -83,16 +84,20 @@ class SO101Controller:
         teleop_id: str,
         cameras: dict[str, dict],
         repo_id: str, task: str,
+        dataset_root: str,
+        push_to_hub: bool = False,
         fps: int = 30, num_episodes: int = 10,
     ) -> list[str]:
         """Build recording command (follower + leader + cameras + dataset)."""
-        argv = ["lerobot-record"]
+        argv = self._wrapper_args("record")
         argv.extend(self._arm_args("robot", robot_type, robot_port, robot_cal_dir, robot_id))
         argv.extend(self._arm_args("teleop", teleop_type, teleop_port, teleop_cal_dir, teleop_id))
         if cameras:
             argv.append(f"--robot.cameras={json.dumps(cameras)}")
         argv.extend([
             f"--dataset.repo_id={repo_id}",
+            f"--dataset.root={Path(dataset_root).expanduser()}",
+            f"--dataset.push_to_hub={str(push_to_hub).lower()}",
             f"--dataset.single_task={task}",
             f"--dataset.fps={fps}",
             f"--dataset.num_episodes={num_episodes}",
@@ -107,11 +112,13 @@ class SO101Controller:
         left_teleop: dict, right_teleop: dict,
         cameras: dict[str, dict],
         repo_id: str, task: str,
+        dataset_root: str,
+        push_to_hub: bool = False,
         fps: int = 30, num_episodes: int = 10,
     ) -> list[str]:
         """Build bimanual recording command (2 followers + 2 leaders + cameras)."""
         return [
-            "lerobot-record",
+            *self._wrapper_args("record"),
             "--robot.type=bi_so_follower",
             f"--robot.id={robot_id}",
             f"--robot.calibration_dir={Path(robot_cal_dir).expanduser()}",
@@ -121,9 +128,50 @@ class SO101Controller:
             f"--teleop.calibration_dir={Path(teleop_cal_dir).expanduser()}",
             *self._bimanual_arm_args("teleop", left_teleop, right_teleop),
             f"--dataset.repo_id={repo_id}",
+            f"--dataset.root={Path(dataset_root).expanduser()}",
+            f"--dataset.push_to_hub={str(push_to_hub).lower()}",
             f"--dataset.single_task={task}",
             f"--dataset.fps={fps}",
             f"--dataset.num_episodes={num_episodes}",
+        ]
+
+    def replay(
+        self,
+        robot_type: str, robot_port: str, robot_cal_dir: str,
+        robot_id: str,
+        repo_id: str,
+        dataset_root: str,
+        episode: int,
+    ) -> list[str]:
+        """Build replay command for one follower arm."""
+        return [
+            *self._wrapper_args("replay"),
+            *self._arm_args("robot", robot_type, robot_port, robot_cal_dir, robot_id),
+            f"--dataset.repo_id={repo_id}",
+            f"--dataset.root={Path(dataset_root).expanduser()}",
+            f"--dataset.episode={episode}",
+        ]
+
+    def replay_bimanual(
+        self,
+        robot_id: str,
+        robot_cal_dir: str,
+        left_robot: dict,
+        right_robot: dict,
+        repo_id: str,
+        dataset_root: str,
+        episode: int,
+    ) -> list[str]:
+        """Build replay command for two follower arms."""
+        return [
+            *self._wrapper_args("replay"),
+            "--robot.type=bi_so_follower",
+            f"--robot.id={robot_id}",
+            f"--robot.calibration_dir={Path(robot_cal_dir).expanduser()}",
+            *self._bimanual_arm_args("robot", left_robot, right_robot),
+            f"--dataset.repo_id={repo_id}",
+            f"--dataset.root={Path(dataset_root).expanduser()}",
+            f"--dataset.episode={episode}",
         ]
 
     def run_policy(
@@ -136,7 +184,7 @@ class SO101Controller:
         num_episodes: int = 1,
     ) -> list[str]:
         """Build policy execution command (follower only, no teleop)."""
-        argv = ["lerobot-record"]
+        argv = self._wrapper_args("record")
         argv.extend(self._arm_args("robot", robot_type, robot_port, robot_cal_dir, robot_id))
         if cameras:
             argv.append(f"--robot.cameras={json.dumps(cameras)}")
@@ -146,6 +194,9 @@ class SO101Controller:
             f"--dataset.num_episodes={num_episodes}",
         ])
         return argv
+
+    def _wrapper_args(self, action: str) -> list[str]:
+        return [sys.executable, "-m", "roboclaw.embodied.lerobot_wrapper", action]
 
     def _arm_prefix(self, arm_type: str) -> str:
         if "leader" in arm_type:

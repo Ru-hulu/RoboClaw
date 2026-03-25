@@ -49,6 +49,7 @@ For robot and hardware work, use this order unless the user explicitly asks othe
 Always refer to arms by alias, not raw `/dev` paths.
 Always confirm whether the workflow is single-arm or bimanual.
 For bimanual recording, follower and leader counts must match and left/right roles must stay consistent.
+Before recording or training, use `describe` to check adjustable parameters.
 
 ## Data Collection Rules
 
