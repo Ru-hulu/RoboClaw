@@ -23,6 +23,11 @@ def _read_symlink_map(directory: str) -> dict[str, str]:
 
 def scan_serial_ports() -> list[dict[str, str]]:
     """Scan serial devices, return list with by_path, by_id, dev."""
+    from roboclaw.embodied.simulation import is_simulating, simulated_ports
+
+    if is_simulating():
+        return simulated_ports()
+
     by_path = _read_symlink_map("/dev/serial/by-path")
     by_id = _read_symlink_map("/dev/serial/by-id")
     all_devs = set(by_path.keys()) | set(by_id.keys())
@@ -55,6 +60,11 @@ def restore_stderr(saved: int) -> None:
 
 def scan_cameras() -> list[dict[str, str | int]]:
     """Scan cameras, return list with by_path, by_id, dev, resolution."""
+    from roboclaw.embodied.simulation import is_simulating, simulated_cameras
+
+    if is_simulating():
+        return simulated_cameras()
+
     try:
         import cv2
     except ImportError:

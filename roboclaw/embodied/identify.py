@@ -172,6 +172,11 @@ def _read_all_baselines(ports: list[dict]) -> dict[str, dict[int, int]]:
 
 def _find_moved_port(ports: list[dict], baselines: dict[str, dict[int, int]]) -> dict | None:
     """Read current positions, find the port with largest motion above threshold."""
+    from roboclaw.embodied.simulation import is_simulating, simulated_moved_port
+
+    if is_simulating():
+        return simulated_moved_port(ports)
+
     best_port = None
     best_delta = 0
     for port in ports:

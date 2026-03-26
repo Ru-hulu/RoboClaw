@@ -4,74 +4,91 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
-
-SETUP_PATH = Path("~/.roboclaw/workspace/embodied/setup.json").expanduser()
 
 _ARM_TYPES = ("so101_follower", "so101_leader")
 _ARM_FIELDS = {"alias", "type", "port", "calibration_dir", "calibrated"}
 _CAMERA_FIELDS = {"by_path", "by_id", "dev", "width", "height"}
 _VALID_TOP_KEYS = {"version", "arms", "cameras", "datasets", "policies", "scanned_ports", "scanned_cameras"}
 
-_CALIBRATION_ROOT = Path("~/.roboclaw/workspace/embodied/calibration").expanduser()
 
-_DEFAULT_SETUP: dict[str, Any] = {
-    "version": 2,
-    "arms": [],
-    "cameras": {},
-    "datasets": {
-        "root": str(Path("~/.roboclaw/workspace/embodied/datasets").expanduser()),
-    },
-    "policies": {
-        "root": str(Path("~/.roboclaw/workspace/embodied/policies").expanduser()),
-    },
-    "scanned_ports": [],
-    "scanned_cameras": [],
-}
+def _get_home() -> Path:
+    """Return ROBOCLAW_HOME (default ~/.roboclaw)."""
+    return Path(os.environ.get("ROBOCLAW_HOME", "~/.roboclaw")).expanduser()
 
 
-def load_setup(path: Path = SETUP_PATH) -> dict[str, Any]:
+def get_setup_path(home: Path | None = None) -> Path:
+    """Return the setup.json path under *home*."""
+    return (home or _get_home()) / "workspace" / "embodied" / "setup.json"
+
+
+def get_calibration_root(home: Path | None = None) -> Path:
+    """Return the calibration directory under *home*."""
+    return (home or _get_home()) / "workspace" / "embodied" / "calibration"
+
+
+def _default_setup(home: Path | None = None) -> dict[str, Any]:
+    """Build a fresh default setup dict with paths under *home*."""
+    base = (home or _get_home()) / "workspace" / "embodied"
+    return {
+        "version": 2,
+        "arms": [],
+        "cameras": {},
+        "datasets": {"root": str(base / "datasets")},
+        "policies": {"root": str(base / "policies")},
+        "scanned_ports": [],
+        "scanned_cameras": [],
+    }
+
+
+def load_setup(path: Path | None = None) -> dict[str, Any]:
     """Load setup.json, return defaults if not found. Refreshes calibration state from disk."""
+    path = path or get_setup_path()
     if not path.exists():
-        return copy.deepcopy(_DEFAULT_SETUP)
+        return _default_setup()
     setup = json.loads(path.read_text(encoding="utf-8"))
     if _refresh_calibration_state(setup):
         save_setup(setup, path)
     return setup
 
 
-def save_setup(setup: dict[str, Any], path: Path = SETUP_PATH) -> None:
+def save_setup(setup: dict[str, Any], path: Path | None = None) -> None:
     """Write setup.json, creating parent dirs if needed."""
+    path = path or get_setup_path()
     _validate_setup(setup)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(setup, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def create_setup_with_scan(path: Path = SETUP_PATH) -> dict[str, Any]:
+def create_setup_with_scan(path: Path | None = None) -> dict[str, Any]:
     """Create setup.json with auto-detected hardware. Called during onboard."""
     from roboclaw.embodied.scan import scan_cameras, scan_serial_ports
 
-    setup = copy.deepcopy(_DEFAULT_SETUP)
+    path = path or get_setup_path()
+    setup = _default_setup()
     setup["scanned_ports"] = scan_serial_ports()
     setup["scanned_cameras"] = scan_cameras()
     save_setup(setup, path)
     return setup
 
 
-def ensure_setup(path: Path = SETUP_PATH) -> dict[str, Any]:
+def ensure_setup(path: Path | None = None) -> dict[str, Any]:
     """Load setup.json if exists, otherwise create with defaults (no scan) and return."""
+    path = path or get_setup_path()
     if path.exists():
         return load_setup(path)
-    defaults = copy.deepcopy(_DEFAULT_SETUP)
+    defaults = _default_setup()
     save_setup(defaults, path)
     return defaults
 
 
 
-def mark_arm_calibrated(alias: str, path: Path = SETUP_PATH) -> dict[str, Any]:
+def mark_arm_calibrated(alias: str, path: Path | None = None) -> dict[str, Any]:
     """Mark an arm as calibrated by alias."""
+    path = path or get_setup_path()
     setup = load_setup(path)
     arm = find_arm(setup.get("arms", []), alias)
     if not arm:
@@ -117,7 +134,7 @@ def _extract_serial_number(port: str) -> str:
 
 
 def set_arm(
-    alias: str, arm_type: str, port: str, *, path: Path = SETUP_PATH,
+    alias: str, arm_type: str, port: str, *, path: Path | None = None,
 ) -> dict[str, Any]:
     """Add or update an arm by alias. Auto-fills calibration_dir and calibration state."""
     if arm_type not in _ARM_TYPES:
@@ -127,10 +144,11 @@ def set_arm(
     if not alias:
         raise ValueError("Arm alias is required.")
     from roboclaw.embodied.scan import scan_serial_ports
+    path = path or get_setup_path()
     setup = load_setup(path)
     port = _resolve_port(port, scan_serial_ports())
     serial = _extract_serial_number(port)
-    calibration_dir = _CALIBRATION_ROOT / serial
+    calibration_dir = get_calibration_root() / serial
     _migrate_none_calibration_file(calibration_dir, serial)
     existing = find_arm(setup.setdefault("arms", []), alias)
     _ensure_unique_port(setup["arms"], alias, port)
@@ -164,8 +182,9 @@ def find_arm(arms: list[dict], alias: str) -> dict | None:
     return None
 
 
-def remove_arm(alias: str, path: Path = SETUP_PATH) -> dict[str, Any]:
+def remove_arm(alias: str, path: Path | None = None) -> dict[str, Any]:
     """Remove an arm by alias."""
+    path = path or get_setup_path()
     setup = load_setup(path)
     arms = setup.get("arms", [])
     arm = find_arm(arms, alias)
@@ -176,8 +195,9 @@ def remove_arm(alias: str, path: Path = SETUP_PATH) -> dict[str, Any]:
     return setup
 
 
-def rename_arm(old_alias: str, new_alias: str, *, path: Path = SETUP_PATH) -> dict[str, Any]:
+def rename_arm(old_alias: str, new_alias: str, *, path: Path | None = None) -> dict[str, Any]:
     """Rename an arm alias without changing any hardware-backed fields."""
+    path = path or get_setup_path()
     if not old_alias:
         raise ValueError("Old arm alias is required.")
     if not new_alias:
@@ -194,8 +214,9 @@ def rename_arm(old_alias: str, new_alias: str, *, path: Path = SETUP_PATH) -> di
     return setup
 
 
-def set_camera(name: str, camera_index: int, path: Path = SETUP_PATH) -> dict[str, Any]:
+def set_camera(name: str, camera_index: int, path: Path | None = None) -> dict[str, Any]:
     """Add or update a camera by picking from scanned_cameras by index."""
+    path = path or get_setup_path()
     setup = load_setup(path)
     scanned = setup.get("scanned_cameras", [])
     if camera_index < 0 or camera_index >= len(scanned):
@@ -210,8 +231,9 @@ def set_camera(name: str, camera_index: int, path: Path = SETUP_PATH) -> dict[st
     return setup
 
 
-def remove_camera(name: str, path: Path = SETUP_PATH) -> dict[str, Any]:
+def remove_camera(name: str, path: Path | None = None) -> dict[str, Any]:
     """Remove a camera by name."""
+    path = path or get_setup_path()
     setup = load_setup(path)
     cameras = setup.get("cameras", {})
     if name not in cameras:

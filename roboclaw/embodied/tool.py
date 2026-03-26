@@ -12,8 +12,12 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from roboclaw.agent.tools.base import Tool
+from roboclaw.embodied.setup import _get_home
 
-_LOGS_DIR = Path("~/.roboclaw/workspace/embodied/jobs").expanduser()
+
+def _logs_dir() -> Path:
+    """Return the embodied jobs log directory under ROBOCLAW_HOME."""
+    return _get_home() / "workspace" / "embodied" / "jobs"
 _NO_TTY_MSG = "This action requires a local terminal. Run: roboclaw agent"
 _BIMANUAL_ID = "bimanual"
 _DEFAULT_REPLAY_ROOT = Path("~/.cache/huggingface/lerobot").expanduser()
@@ -726,7 +730,7 @@ async def _do_train(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: 
         steps=kwargs.get("steps", 100_000),
         device=kwargs.get("device", "cuda"),
     )
-    job_id = await LocalLeRobotRunner().run_detached(argv=argv, log_dir=_LOGS_DIR)
+    job_id = await LocalLeRobotRunner().run_detached(argv=argv, log_dir=_logs_dir())
     return f"Training started. Job ID: {job_id}"
 
 
@@ -734,7 +738,7 @@ async def _do_job_status(setup: dict[str, Any], kwargs: dict[str, Any], tty_hand
     from roboclaw.embodied.runner import LocalLeRobotRunner
 
     job_id = kwargs.get("job_id", "")
-    status = await LocalLeRobotRunner().job_status(job_id=job_id, log_dir=_LOGS_DIR)
+    status = await LocalLeRobotRunner().job_status(job_id=job_id, log_dir=_logs_dir())
     return "\n".join(f"{key}: {value}" for key, value in status.items())
 
 
@@ -847,7 +851,7 @@ def _dataset_root(setup: dict[str, Any], fallback: Path | None = None) -> Path:
         return Path(root).expanduser()
     if fallback is not None:
         return fallback.expanduser()
-    return Path("~/.roboclaw/workspace/embodied/datasets").expanduser()
+    return _get_home() / "workspace" / "embodied" / "datasets"
 
 
 def _arm_id(arm: dict[str, Any]) -> str:

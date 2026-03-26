@@ -45,6 +45,11 @@ app = typer.Typer(
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
 
+# Register sub-apps
+from roboclaw.cli.dev import dev_app
+
+app.add_typer(dev_app, name="dev", help="Developer utilities (reset workspace, etc.).")
+
 
 def _new_cli_session_id() -> str:
     """Generate a fresh CLI session id for one agent invocation."""
@@ -289,21 +294,23 @@ def main(
 # ============================================================================
 
 
-@app.command()
-def onboard():
-    """Initialize roboclaw configuration and workspace."""
+def run_onboard_core(*, interactive: bool = True) -> None:
+    """Core onboard logic shared by ``roboclaw onboard`` and ``roboclaw dev reset``.
+
+    When *interactive* is False the config is always created fresh (no
+    overwrite prompt) and the "next steps" banner is suppressed.
+    """
     from roboclaw.config.loader import get_config_path, load_config, save_config
     from roboclaw.config.schema import Config
 
     config_path = get_config_path()
 
-    if config_path.exists():
+    if config_path.exists() and interactive:
         console.print(f"[yellow]Config already exists at {config_path}[/yellow]")
         console.print("  [bold]y[/bold] = overwrite with defaults (existing values will be lost)")
         console.print("  [bold]N[/bold] = refresh config, keeping existing values and adding new fields")
         if typer.confirm("Overwrite?"):
-            config = Config()
-            save_config(config)
+            save_config(Config())
             console.print(f"[green]✓[/green] Config reset to defaults at {config_path}")
         else:
             config = load_config()
@@ -317,30 +324,33 @@ def onboard():
 
     _onboard_plugins(config_path)
 
-    # Create workspace
     workspace = get_workspace_path()
-
     if not workspace.exists():
         workspace.mkdir(parents=True, exist_ok=True)
         console.print(f"[green]✓[/green] Created workspace at {workspace}")
-
     sync_workspace_templates(workspace)
 
-    # Scan hardware and create embodied setup
-    from roboclaw.embodied.setup import create_setup_with_scan, SETUP_PATH
-    if not SETUP_PATH.exists():
+    from roboclaw.embodied.setup import create_setup_with_scan, get_setup_path
+    if not get_setup_path().exists():
         console.print("[dim]Scanning hardware...[/dim]")
         setup = create_setup_with_scan()
         n_ports = len(setup.get("scanned_ports", []))
         n_cameras = len(setup.get("scanned_cameras", []))
         console.print(f"[green]✓[/green] Embodied setup created ({n_ports} serial port(s), {n_cameras} camera(s) detected)")
 
-    console.print(f"\n{__logo__} RoboClaw is ready!")
-    console.print("\nNext steps:")
-    console.print("  1. Add your API key to [cyan]~/.roboclaw/config.json[/cyan]")
-    console.print("     Get one at: https://openrouter.ai/keys")
-    console.print("  2. Chat: [cyan]roboclaw agent -m \"Hello!\"[/cyan]")
-    console.print("\n[dim]Want Telegram/WhatsApp? See: https://github.com/MINT-SJTU/RoboClaw#-chat-apps[/dim]")
+    if interactive:
+        console.print(f"\n{__logo__} RoboClaw is ready!")
+        console.print("\nNext steps:")
+        console.print("  1. Add your API key to [cyan]~/.roboclaw/config.json[/cyan]")
+        console.print("     Get one at: https://openrouter.ai/keys")
+        console.print("  2. Chat: [cyan]roboclaw agent -m \"Hello!\"[/cyan]")
+        console.print("\n[dim]Want Telegram/WhatsApp? See: https://github.com/MINT-SJTU/RoboClaw#-chat-apps[/dim]")
+
+
+@app.command()
+def onboard():
+    """Initialize roboclaw configuration and workspace."""
+    run_onboard_core(interactive=True)
 
 
 def _merge_missing_defaults(existing: Any, defaults: Any) -> Any:

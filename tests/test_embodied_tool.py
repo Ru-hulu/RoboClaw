@@ -83,7 +83,7 @@ def _find_tool(tools: list[EmbodiedToolGroup], name: str) -> EmbodiedToolGroup:
 @pytest.fixture(autouse=True)
 def calibration_root(tmp_path: Path) -> Path:
     root = tmp_path / "calibration"
-    with std_patch("roboclaw.embodied.setup._CALIBRATION_ROOT", root):
+    with std_patch("roboclaw.embodied.setup.get_calibration_root", return_value=root):
         yield root
 
 
