@@ -1,4 +1,4 @@
-"""Tests for the EmbodiedTool integration with the agent."""
+"""Tests for the EmbodiedToolGroup integration with the agent."""
 
 from __future__ import annotations
 
@@ -22,7 +22,12 @@ from roboclaw.embodied.setup import (
     set_arm,
     set_camera,
 )
-from roboclaw.embodied.tool import EmbodiedTool, _group_arms, _resolve_arms
+from roboclaw.embodied.tool import (
+    EmbodiedToolGroup,
+    _group_arms,
+    _resolve_arms,
+    create_embodied_tools,
+)
 
 _MOCK_SCANNED_PORTS = [
     {
@@ -68,6 +73,13 @@ _MOCK_SETUP = {
 }
 
 
+def _find_tool(tools: list[EmbodiedToolGroup], name: str) -> EmbodiedToolGroup:
+    for tool in tools:
+        if tool.name == name:
+            return tool
+    raise ValueError(f"No tool named {name}")
+
+
 @pytest.fixture(autouse=True)
 def calibration_root(tmp_path: Path) -> Path:
     root = tmp_path / "calibration"
@@ -75,46 +87,86 @@ def calibration_root(tmp_path: Path) -> Path:
         yield root
 
 
-def test_tool_schema() -> None:
-    tool = EmbodiedTool()
+def test_create_embodied_tools_returns_five_groups() -> None:
+    tools = create_embodied_tools()
+    assert len(tools) == 5
+    names = {t.name for t in tools}
+    assert names == {"embodied_setup", "embodied_hardware", "embodied_control", "embodied_replay", "embodied_train"}
+
+
+def test_setup_tool_schema() -> None:
+    tool = _find_tool(create_embodied_tools(), "embodied_setup")
     params = tool.parameters
 
-    assert tool.name == "embodied"
-    assert "replay" in tool.description.lower()
     assert params["type"] == "object"
     assert params["required"] == ["action"]
+    assert params["additionalProperties"] is False
+    assert "alias" in params["properties"]
+    assert "port" in params["properties"]
+    assert "arm_type" in params["properties"]
+    assert "target_action" in params["properties"]
+    # These params should NOT be in setup
+    assert "dataset_name" not in params["properties"]
+    assert "checkpoint_path" not in params["properties"]
+    assert "arms" not in params["properties"]
+
+
+def test_hardware_tool_schema() -> None:
+    tool = _find_tool(create_embodied_tools(), "embodied_hardware")
+    params = tool.parameters
+
+    assert params["required"] == ["action"]
+    assert params["additionalProperties"] is False
+    assert set(params["properties"].keys()) == {"action", "arms"}
+    assert params["properties"]["action"]["enum"] == ["identify", "calibrate"]
+    # Hardware should NOT have port parameter
+    assert "port" not in params["properties"]
+
+
+def test_control_tool_schema() -> None:
+    tool = _find_tool(create_embodied_tools(), "embodied_control")
+    params = tool.parameters
+
+    assert params["required"] == ["action"]
+    assert params["additionalProperties"] is False
+    assert "checkpoint_path" in params["properties"]
+    assert "dataset_name" in params["properties"]
     assert params["properties"]["use_cameras"]["default"] is True
-    assert "name" not in params["properties"]
-    assert "follower_names" not in params["properties"]
-    assert "leader_names" not in params["properties"]
-    assert params["properties"]["arms"]["type"] == "string"
-    assert params["properties"]["target_action"]["type"] == "string"
-    assert params["properties"]["episode"]["type"] == "integer"
-    assert params["properties"]["alias"]["type"] == "string"
-    assert params["properties"]["port"]["type"] == "string"
-    assert params["properties"]["action"]["enum"] == [
-        "doctor",
-        "identify",
-        "describe",
-        "calibrate",
-        "teleoperate",
-        "record",
-        "replay",
-        "train",
-        "run_policy",
-        "job_status",
-        "setup_show",
-        "set_arm",
-        "rename_arm",
-        "remove_arm",
-        "set_camera",
-        "remove_camera",
-    ]
+    assert params["properties"]["action"]["enum"] == ["teleoperate", "record"]
+
+
+def test_replay_tool_schema() -> None:
+    tool = _find_tool(create_embodied_tools(), "embodied_replay")
+    params = tool.parameters
+
+    assert params["required"] == ["action"]
+    assert params["additionalProperties"] is False
+    assert "episode" in params["properties"]
+    assert "dataset_name" in params["properties"]
+    assert params["properties"]["action"]["enum"] == ["replay"]
+
+
+def test_train_tool_schema() -> None:
+    tool = _find_tool(create_embodied_tools(), "embodied_train")
+    params = tool.parameters
+
+    assert params["required"] == ["action"]
+    assert params["additionalProperties"] is False
+    assert "steps" in params["properties"]
+    assert "device" in params["properties"]
+    assert "job_id" in params["properties"]
+    assert params["properties"]["action"]["enum"] == ["train", "job_status"]
+
+
+def test_cross_group_isolation_hardware_rejects_port() -> None:
+    """Hardware tool should not accept port parameter in its schema."""
+    hw_tool = _find_tool(create_embodied_tools(), "embodied_hardware")
+    assert "port" not in hw_tool.parameters["properties"]
 
 
 @pytest.mark.asyncio
 async def test_describe_action() -> None:
-    tool = EmbodiedTool()
+    tool = _find_tool(create_embodied_tools(), "embodied_setup")
     result = await tool.execute(action="describe", target_action="record")
     assert "record" in result
     assert "dataset" in result.lower()
@@ -122,7 +174,7 @@ async def test_describe_action() -> None:
 
 @pytest.mark.asyncio
 async def test_doctor_action() -> None:
-    tool = EmbodiedTool()
+    tool = _find_tool(create_embodied_tools(), "embodied_setup")
     mock_runner = AsyncMock()
     mock_runner.run.return_value = (0, "lerobot 0.5.0", "")
 
@@ -138,7 +190,7 @@ async def test_doctor_action() -> None:
 
 @pytest.mark.asyncio
 async def test_calibrate_all_arms() -> None:
-    tool = EmbodiedTool(tty_handoff=AsyncMock())
+    tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "embodied_hardware")
     mock_runner = AsyncMock()
     mock_runner.run_interactive.return_value = 0
 
@@ -153,7 +205,6 @@ async def test_calibrate_all_arms() -> None:
     assert "2 succeeded" in result
     assert mock_runner.run_interactive.call_count == 2
     assert mock_mark.call_count == 2
-    # Banner is now part of the TTY handoff label, not a separate print call
 
 
 @pytest.mark.asyncio
@@ -165,7 +216,7 @@ async def test_calibrate_selected_arms_even_if_calibrated() -> None:
             _MOCK_SETUP["arms"][1],
         ],
     }
-    tool = EmbodiedTool(tty_handoff=AsyncMock())
+    tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "embodied_hardware")
     mock_runner = AsyncMock()
     mock_runner.run_interactive.return_value = 0
 
@@ -183,7 +234,7 @@ async def test_calibrate_selected_arms_even_if_calibrated() -> None:
 
 @pytest.mark.asyncio
 async def test_calibrate_no_arms() -> None:
-    tool = EmbodiedTool()
+    tool = _find_tool(create_embodied_tools(), "embodied_hardware")
     with patch("roboclaw.embodied.setup.ensure_setup", return_value={**_MOCK_SETUP, "arms": []}):
         result = await tool.execute(action="calibrate")
     assert result == "No arms configured."
@@ -191,7 +242,7 @@ async def test_calibrate_no_arms() -> None:
 
 @pytest.mark.asyncio
 async def test_calibrate_missing_arm() -> None:
-    tool = EmbodiedTool(tty_handoff=AsyncMock())
+    tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "embodied_hardware")
     with patch("roboclaw.embodied.setup.ensure_setup", return_value=_MOCK_SETUP):
         result = await tool.execute(action="calibrate", arms="missing_arm")
     assert result == "No arm with port 'missing_arm' found in setup."
@@ -199,7 +250,7 @@ async def test_calibrate_missing_arm() -> None:
 
 @pytest.mark.asyncio
 async def test_calibrate_interrupted_on_sigint() -> None:
-    tool = EmbodiedTool(tty_handoff=AsyncMock())
+    tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "embodied_hardware")
     mock_runner = AsyncMock()
     mock_runner.run_interactive.side_effect = [0, 130]
 
@@ -217,7 +268,7 @@ async def test_calibrate_interrupted_on_sigint() -> None:
 
 @pytest.mark.asyncio
 async def test_record_action() -> None:
-    tool = EmbodiedTool(tty_handoff=AsyncMock())
+    tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "embodied_control")
     mock_runner = AsyncMock()
     mock_runner.run_interactive.return_value = 0
 
@@ -245,7 +296,7 @@ async def test_record_action() -> None:
 
 @pytest.mark.asyncio
 async def test_record_action_without_cameras() -> None:
-    tool = EmbodiedTool(tty_handoff=AsyncMock())
+    tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "embodied_control")
     mock_runner = AsyncMock()
     mock_runner.run_interactive.return_value = 0
 
@@ -268,11 +319,11 @@ async def test_record_action_without_cameras() -> None:
 
 @pytest.mark.asyncio
 async def test_record_action_rejects_non_ascii_dataset_name() -> None:
-    tool = EmbodiedTool(tty_handoff=AsyncMock())
+    tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "embodied_control")
     with patch("roboclaw.embodied.setup.ensure_setup", return_value=_MOCK_SETUP):
         result = await tool.execute(
             action="record",
-            dataset_name="抓取任务",
+            dataset_name="\u6293\u53d6\u4efb\u52a1",
             task="grasp",
             num_episodes=5,
             arms=f"{_FOLLOWER_PORT},{_LEADER_PORT}",
@@ -291,7 +342,7 @@ async def test_record_bimanual() -> None:
             {"alias": "right_l", "type": "so101_leader", "port": "/dev/d", "calibration_dir": "/c/5B14030002", "calibrated": True},
         ],
     }
-    tool = EmbodiedTool(tty_handoff=AsyncMock())
+    tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "embodied_control")
     mock_runner = AsyncMock()
     mock_runner.run_interactive.return_value = 0
 
@@ -317,7 +368,7 @@ async def test_record_bimanual() -> None:
 
 @pytest.mark.asyncio
 async def test_replay_single_uses_followers_only() -> None:
-    tool = EmbodiedTool(tty_handoff=AsyncMock())
+    tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "embodied_replay")
     mock_runner = AsyncMock()
     mock_runner.run_interactive.return_value = 0
 
@@ -345,7 +396,7 @@ async def test_replay_bimanual_with_root_fallback() -> None:
             {"alias": "right_f", "type": "so101_follower", "port": "/dev/b", "calibration_dir": "/c/5B14030892", "calibrated": True},
         ],
     }
-    tool = EmbodiedTool(tty_handoff=AsyncMock())
+    tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "embodied_replay")
     mock_runner = AsyncMock()
     mock_runner.run_interactive.return_value = 0
 
@@ -365,7 +416,7 @@ async def test_replay_bimanual_with_root_fallback() -> None:
 
 @pytest.mark.asyncio
 async def test_replay_rejects_explicit_leaders() -> None:
-    tool = EmbodiedTool(tty_handoff=AsyncMock())
+    tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "embodied_replay")
     with patch("roboclaw.embodied.setup.ensure_setup", return_value=_MOCK_SETUP):
         result = await tool.execute(action="replay", dataset_name="test", arms=_LEADER_PORT)
     assert "Replay only supports follower arms" in result
@@ -382,7 +433,7 @@ async def test_teleoperate_bimanual() -> None:
             {"alias": "right_l", "type": "so101_leader", "port": "/dev/d", "calibration_dir": "/c/d", "calibrated": True},
         ],
     }
-    tool = EmbodiedTool(tty_handoff=AsyncMock())
+    tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "embodied_control")
     mock_runner = AsyncMock()
     mock_runner.run_interactive.return_value = 0
 
@@ -402,7 +453,7 @@ async def test_teleoperate_bimanual() -> None:
 
 @pytest.mark.asyncio
 async def test_train_action() -> None:
-    tool = EmbodiedTool()
+    tool = _find_tool(create_embodied_tools(), "embodied_train")
     mock_runner = AsyncMock()
     mock_runner.run_detached.return_value = "job-abc-123"
 
@@ -417,18 +468,18 @@ async def test_train_action() -> None:
 
 @pytest.mark.asyncio
 async def test_run_policy_no_follower_arm() -> None:
-    tool = EmbodiedTool()
+    tool = _find_tool(create_embodied_tools(), "embodied_control")
     setup = {**_MOCK_SETUP, "arms": [{**_MOCK_SETUP["arms"][1]}]}
 
     with patch("roboclaw.embodied.setup.ensure_setup", return_value=setup):
-        result = await tool.execute(action="run_policy")
+        result = await tool.execute(action="record", checkpoint_path="/models/act")
 
     assert result == "No follower arm configured."
 
 
 @pytest.mark.asyncio
 async def test_run_policy_requires_single_follower() -> None:
-    tool = EmbodiedTool()
+    tool = _find_tool(create_embodied_tools(), "embodied_control")
     setup = {
         **_MOCK_SETUP,
         "arms": [
@@ -438,16 +489,15 @@ async def test_run_policy_requires_single_follower() -> None:
     }
 
     with patch("roboclaw.embodied.setup.ensure_setup", return_value=setup):
-        result = await tool.execute(action="run_policy")
+        result = await tool.execute(action="record", checkpoint_path="/models/act")
 
     assert "exactly 1 follower arm" in result
 
 
 @pytest.mark.asyncio
-async def test_unknown_action() -> None:
-    tool = EmbodiedTool()
-    with patch("roboclaw.embodied.setup.ensure_setup", return_value=_MOCK_SETUP):
-        result = await tool.execute(action="fly_to_moon")
+async def test_unknown_action_in_group() -> None:
+    tool = _find_tool(create_embodied_tools(), "embodied_setup")
+    result = await tool.execute(action="fly_to_moon")
     assert "Unknown action" in result
 
 

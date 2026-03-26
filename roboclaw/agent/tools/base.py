@@ -160,8 +160,15 @@ class Tool(ABC):
                 if k not in val:
                     errors.append(f"missing required {path + '.' + k if path else k}")
             for k, v in val.items():
+                child_path = path + "." + k if path else k
                 if k in props:
-                    errors.extend(self._validate(v, props[k], path + "." + k if path else k))
+                    errors.extend(self._validate(v, props[k], child_path))
+                    continue
+                if schema.get("additionalProperties") is False:
+                    errors.append(f"{child_path} is not allowed")
+                    continue
+                if isinstance(schema.get("additionalProperties"), dict):
+                    errors.extend(self._validate(v, schema["additionalProperties"], child_path))
         if t == "array" and "items" in schema:
             for i, item in enumerate(val):
                 errors.extend(

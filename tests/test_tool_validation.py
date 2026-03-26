@@ -82,6 +82,18 @@ def test_validate_params_ignores_unknown_fields() -> None:
     assert errors == []
 
 
+def test_validate_params_rejects_unknown_fields_when_disabled() -> None:
+    tool = CastTestTool(
+        {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "additionalProperties": False,
+        }
+    )
+    errors = tool.validate_params({"query": "hi", "extra": "x"})
+    assert errors == ["extra is not allowed"]
+
+
 async def test_registry_returns_validation_error() -> None:
     reg = ToolRegistry()
     reg.register(SampleTool())

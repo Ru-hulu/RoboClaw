@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from roboclaw.embodied.tool import EmbodiedTool
+from roboclaw.embodied.tool import create_embodied_tools, EmbodiedToolGroup
 
 
 _MOCK_SETUP_WITH_PORTS = {
@@ -30,10 +30,15 @@ _MOCK_SETUP_NO_PORTS = {
 }
 
 
+def _hw_tool(tty_handoff=None) -> EmbodiedToolGroup:
+    tools = create_embodied_tools(tty_handoff=tty_handoff)
+    return next(t for t in tools if t.name == "embodied_hardware")
+
+
 @pytest.mark.asyncio
 async def test_identify_no_tty() -> None:
     """Identify without TTY handoff should return the no-TTY message."""
-    tool = EmbodiedTool()  # no tty_handoff
+    tool = _hw_tool()  # no tty_handoff
     with patch("roboclaw.embodied.setup.ensure_setup", return_value=_MOCK_SETUP_WITH_PORTS):
         result = await tool.execute(action="identify")
     assert "local terminal" in result.lower()
@@ -42,7 +47,7 @@ async def test_identify_no_tty() -> None:
 @pytest.mark.asyncio
 async def test_identify_no_ports() -> None:
     """Identify with empty scanned_ports should return an error message."""
-    tool = EmbodiedTool(tty_handoff=AsyncMock())
+    tool = _hw_tool(tty_handoff=AsyncMock())
     with patch("roboclaw.embodied.setup.ensure_setup", return_value=_MOCK_SETUP_NO_PORTS):
         result = await tool.execute(action="identify")
     assert result == "No serial ports detected."
@@ -52,7 +57,7 @@ async def test_identify_no_ports() -> None:
 async def test_identify_success() -> None:
     """Identify with TTY and ports should run the subprocess and report success."""
     mock_handoff = AsyncMock()
-    tool = EmbodiedTool(tty_handoff=mock_handoff)
+    tool = _hw_tool(tty_handoff=mock_handoff)
     mock_runner = AsyncMock()
     mock_runner.run_interactive.return_value = 0
 
@@ -71,7 +76,7 @@ async def test_identify_success() -> None:
 @pytest.mark.asyncio
 async def test_identify_failure() -> None:
     """Identify subprocess failure should report the exit code."""
-    tool = EmbodiedTool(tty_handoff=AsyncMock())
+    tool = _hw_tool(tty_handoff=AsyncMock())
     mock_runner = AsyncMock()
     mock_runner.run_interactive.return_value = 1
 

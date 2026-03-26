@@ -135,8 +135,9 @@ class AgentLoop:
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
         if not self.restrict_to_workspace:
-            from roboclaw.embodied.tool import EmbodiedTool
-            self.tools.register(EmbodiedTool(tty_handoff=self.tty_handoff))
+            from roboclaw.embodied.tool import create_embodied_tools
+            for tool in create_embodied_tools(tty_handoff=self.tty_handoff):
+                self.tools.register(tool)
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""

@@ -142,6 +142,7 @@ class SO101Controller:
         repo_id: str,
         dataset_root: str,
         episode: int,
+        fps: int = 30,
     ) -> list[str]:
         """Build replay command for one follower arm."""
         return [
@@ -150,6 +151,7 @@ class SO101Controller:
             f"--dataset.repo_id={repo_id}",
             f"--dataset.root={Path(dataset_root).expanduser()}",
             f"--dataset.episode={episode}",
+            f"--dataset.fps={fps}",
         ]
 
     def replay_bimanual(
@@ -161,6 +163,7 @@ class SO101Controller:
         repo_id: str,
         dataset_root: str,
         episode: int,
+        fps: int = 30,
     ) -> list[str]:
         """Build replay command for two follower arms."""
         return [
@@ -172,6 +175,7 @@ class SO101Controller:
             f"--dataset.repo_id={repo_id}",
             f"--dataset.root={Path(dataset_root).expanduser()}",
             f"--dataset.episode={episode}",
+            f"--dataset.fps={fps}",
         ]
 
     def run_policy(
