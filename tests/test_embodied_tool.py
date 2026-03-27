@@ -92,11 +92,11 @@ def calibration_root(tmp_path: Path) -> Path:
         yield root
 
 
-def test_create_embodied_tools_returns_five_groups() -> None:
+def test_create_embodied_tools_returns_six_groups() -> None:
     tools = create_embodied_tools()
-    assert len(tools) == 5
+    assert len(tools) == 6
     names = {t.name for t in tools}
-    assert names == {"embodied_setup", "embodied_hardware", "embodied_control", "embodied_replay", "embodied_train"}
+    assert names == {"embodied_setup", "embodied_hardware", "embodied_control", "embodied_replay", "embodied_train", "embodied_hand"}
 
 
 def test_setup_tool_schema() -> None:
@@ -749,10 +749,10 @@ def test_calibration_dir_uses_serial_number(setup_file: Path, calibration_root: 
 
 def test_set_hand(setup_file: Path) -> None:
     with std_patch("roboclaw.embodied.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
-        result = set_hand("left_hand", "revo2_left", "/dev/ttyACM0", path=setup_file)
+        result = set_hand("left_hand", "inspire_left", "/dev/ttyACM0", path=setup_file)
     hand = find_hand(result["hands"], "left_hand")
     assert hand is not None
-    assert hand["type"] == "revo2_left"
+    assert hand["type"] == "inspire_left"
     assert hand["port"] == "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B14032630-if00"
     assert "calibration_dir" not in hand
     assert "calibrated" not in hand
@@ -762,8 +762,8 @@ def test_set_hand(setup_file: Path) -> None:
 
 def test_set_hand_replaces_existing(setup_file: Path) -> None:
     with std_patch("roboclaw.embodied.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
-        set_hand("h", "revo2_left", "/dev/ttyACM0", path=setup_file)
-        result = set_hand("h", "revo2_right", "/dev/ttyACM1", path=setup_file)
+        set_hand("h", "inspire_left", "/dev/ttyACM0", path=setup_file)
+        result = set_hand("h", "inspire_right", "/dev/ttyACM1", path=setup_file)
     assert len(result["hands"]) == 1
     assert find_hand(result["hands"], "h")["port"] == "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B14030892-if00"
 
@@ -776,7 +776,7 @@ def test_set_hand_invalid_type(setup_file: Path) -> None:
 
 def test_remove_hand(setup_file: Path) -> None:
     with std_patch("roboclaw.embodied.scan.scan_serial_ports", return_value=[]):
-        set_hand("left_hand", "revo2_left", "/dev/ttyUSB0", path=setup_file)
+        set_hand("left_hand", "inspire_left", "/dev/ttyUSB0", path=setup_file)
     result = remove_hand("left_hand", path=setup_file)
     assert find_hand(result["hands"], "left_hand") is None
 
@@ -788,8 +788,8 @@ def test_remove_hand_missing(setup_file: Path) -> None:
 
 def test_find_hand() -> None:
     hands = [
-        {"alias": "left", "type": "revo2_left", "port": "/dev/ttyUSB0"},
-        {"alias": "right", "type": "revo2_right", "port": "/dev/ttyUSB1"},
+        {"alias": "left", "type": "inspire_left", "port": "/dev/ttyUSB0"},
+        {"alias": "right", "type": "inspire_right", "port": "/dev/ttyUSB1"},
     ]
     assert find_hand(hands, "left") == hands[0]
     assert find_hand(hands, "right") == hands[1]
@@ -801,3 +801,43 @@ def test_set_arm_rejects_revo2(setup_file: Path) -> None:
     with std_patch("roboclaw.embodied.scan.scan_serial_ports", return_value=[]):
         with pytest.raises(ValueError, match="Invalid arm_type"):
             set_arm("h", "revo2", "/dev/ttyUSB0", path=setup_file)
+
+
+# ── embodied_hand tool group tests ────────────────────────────────────
+
+
+def test_hand_tool_schema() -> None:
+    tool = _find_tool(create_embodied_tools(), "embodied_hand")
+    params = tool.parameters
+
+    assert params["type"] == "object"
+    assert params["required"] == ["action"]
+    assert params["additionalProperties"] is False
+    assert set(params["properties"]["action"]["enum"]) == {
+        "hand_open", "hand_close", "hand_pose", "hand_status",
+    }
+    assert "hand_name" in params["properties"]
+    assert "positions" in params["properties"]
+    # Hand-specific params should NOT leak into other groups
+    assert "alias" not in params["properties"]
+    assert "arm_type" not in params["properties"]
+
+
+def test_train_schema_has_no_hand_params() -> None:
+    """hand_type, hand_name, positions should NOT appear in embodied_train."""
+    tool = _find_tool(create_embodied_tools(), "embodied_train")
+    props = tool.parameters["properties"]
+    assert "hand_type" not in props
+    assert "hand_name" not in props
+    assert "positions" not in props
+
+
+def test_setup_schema_has_no_hand_runtime_params() -> None:
+    """hand_name and positions should NOT appear in embodied_setup."""
+    tool = _find_tool(create_embodied_tools(), "embodied_setup")
+    props = tool.parameters["properties"]
+    assert "hand_name" not in props
+    assert "positions" not in props
+    # hand_type SHOULD be in setup (for set_hand)
+    assert "hand_type" in props
+    assert props["hand_type"]["enum"] == ["inspire_left", "inspire_right"]

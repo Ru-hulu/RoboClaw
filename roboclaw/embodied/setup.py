@@ -10,11 +10,53 @@ from typing import Any
 
 _ARM_TYPES = ("so101_follower", "so101_leader")
 _ARM_FIELDS = {"alias", "type", "port", "calibration_dir", "calibrated"}
-_HAND_TYPES = ("revo2_left", "revo2_right")
+_HAND_TYPES = ("inspire_left", "inspire_right")
 _HAND_FIELDS = {"alias", "type", "port"}
 _CAMERA_FIELDS = {"by_path", "by_id", "dev", "width", "height"}
 _VALID_TOP_KEYS = {"version", "arms", "hands", "cameras", "datasets", "policies", "scanned_ports", "scanned_cameras"}
 
+
+# ── Generic device helpers ───────────────────────────────────────────
+
+
+def _find_by_alias(items: list[dict], alias: str) -> dict | None:
+    """Find an item in a list of dicts by its 'alias' field."""
+    for item in items:
+        if item.get("alias") == alias:
+            return item
+    return None
+
+
+def _remove_device(key: str, alias: str, path: Path | None = None) -> dict[str, Any]:
+    """Generic load/find/remove/save for a device list (arms, hands, etc.)."""
+    path = path or get_setup_path()
+    setup = load_setup(path)
+    items = setup.get(key, [])
+    item = _find_by_alias(items, alias)
+    if item is None:
+        label = key.rstrip("s")  # "arms" -> "arm"
+        raise ValueError(f"No {label} with alias '{alias}' in setup.")
+    items.remove(item)
+    save_setup(setup, path)
+    return setup
+
+
+def _validate_device_list(
+    items: Any, allowed_fields: set, allowed_types: tuple, label: str,
+) -> None:
+    """Validate a list of device entries (arms, hands, etc.)."""
+    if not isinstance(items, list):
+        raise ValueError(f"'{label.lower()}s' must be a list.")
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError(f"Each {label.lower()} entry must be a dict, got {type(item).__name__}.")
+        alias = item.get("alias", "<unknown>")
+        bad_fields = set(item.keys()) - allowed_fields
+        if bad_fields:
+            raise ValueError(f"{label} '{alias}' has unknown fields: {bad_fields}")
+        item_type = item.get("type")
+        if item_type is not None and item_type not in allowed_types:
+            raise ValueError(f"{label} '{alias}' has invalid type '{item_type}'.")
 
 
 def get_roboclaw_home(home: str | Path | None = None) -> Path:
@@ -40,6 +82,7 @@ def _default_setup(home: Path | None = None) -> dict[str, Any]:
     return {
         "version": 2,
         "arms": [],
+        "hands": [],
         "cameras": {},
         "datasets": {"root": str(base / "datasets")},
         "policies": {"root": str(base / "policies")},
@@ -180,23 +223,12 @@ def arm_display_name(arm: dict) -> str:
 
 def find_arm(arms: list[dict], alias: str) -> dict | None:
     """Find an arm in the arms list by alias. Returns the dict or None."""
-    for arm in arms:
-        if arm.get("alias") == alias:
-            return arm
-    return None
+    return _find_by_alias(arms, alias)
 
 
 def remove_arm(alias: str, path: Path | None = None) -> dict[str, Any]:
     """Remove an arm by alias."""
-    path = path or get_setup_path()
-    setup = load_setup(path)
-    arms = setup.get("arms", [])
-    arm = find_arm(arms, alias)
-    if arm is None:
-        raise ValueError(f"No arm with alias '{alias}' in setup.")
-    arms.remove(arm)
-    save_setup(setup, path)
-    return setup
+    return _remove_device("arms", alias, path)
 
 
 def rename_arm(old_alias: str, new_alias: str, *, path: Path | None = None) -> dict[str, Any]:
@@ -243,23 +275,12 @@ def set_hand(alias: str, hand_type: str, port: str, *, path: Path | None = None)
 
 def remove_hand(alias: str, path: Path | None = None) -> dict[str, Any]:
     """Remove a hand by alias."""
-    path = path or get_setup_path()
-    setup = load_setup(path)
-    hands = setup.get("hands", [])
-    hand = find_hand(hands, alias)
-    if hand is None:
-        raise ValueError(f"No hand with alias '{alias}' in setup.")
-    hands.remove(hand)
-    save_setup(setup, path)
-    return setup
+    return _remove_device("hands", alias, path)
 
 
 def find_hand(hands: list[dict], alias: str) -> dict | None:
     """Find a hand in the hands list by alias. Returns the dict or None."""
-    for hand in hands:
-        if hand.get("alias") == alias:
-            return hand
-    return None
+    return _find_by_alias(hands, alias)
 
 
 def set_camera(name: str, camera_index: int, path: Path | None = None) -> dict[str, Any]:
@@ -305,35 +326,13 @@ def _validate_setup(setup: dict[str, Any]) -> None:
 
 
 def _validate_arms(arms: Any) -> None:
-    """Validate all arm entries. Arms is a list of dicts."""
-    if not isinstance(arms, list):
-        raise ValueError("'arms' must be a list.")
-    for arm in arms:
-        if not isinstance(arm, dict):
-            raise ValueError(f"Each arm entry must be a dict, got {type(arm).__name__}.")
-        alias = arm.get("alias", "<unknown>")
-        bad_fields = set(arm.keys()) - _ARM_FIELDS
-        if bad_fields:
-            raise ValueError(f"Arm '{alias}' has unknown fields: {bad_fields}")
-        arm_type = arm.get("type")
-        if arm_type is not None and arm_type not in _ARM_TYPES:
-            raise ValueError(f"Arm '{alias}' has invalid type '{arm_type}'.")
+    """Validate all arm entries."""
+    _validate_device_list(arms, _ARM_FIELDS, _ARM_TYPES, "Arm")
 
 
 def _validate_hands(hands: Any) -> None:
     """Validate all hand entries."""
-    if not isinstance(hands, list):
-        raise ValueError("'hands' must be a list.")
-    for hand in hands:
-        if not isinstance(hand, dict):
-            raise ValueError(f"Each hand entry must be a dict, got {type(hand).__name__}.")
-        alias = hand.get("alias", "<unknown>")
-        bad_fields = set(hand.keys()) - _HAND_FIELDS
-        if bad_fields:
-            raise ValueError(f"Hand '{alias}' has unknown fields: {bad_fields}")
-        hand_type = hand.get("type")
-        if hand_type is not None and hand_type not in _HAND_TYPES:
-            raise ValueError(f"Hand '{alias}' has invalid type '{hand_type}'.")
+    _validate_device_list(hands, _HAND_FIELDS, _HAND_TYPES, "Hand")
 
 
 def _validate_cameras(cameras: Any) -> None:

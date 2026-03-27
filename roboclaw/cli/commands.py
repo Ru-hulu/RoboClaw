@@ -1167,7 +1167,7 @@ def _login_openai_codex() -> None:
         token = None
         try:
             token = get_token()
-        except Exception:
+        except RuntimeError:
             pass
         if not (token and token.access):
             console.print("[cyan]Starting interactive OAuth login...[/cyan]\n")

@@ -12,6 +12,12 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from roboclaw.agent.tools.base import Tool
+from roboclaw.embodied.hand_actions import (
+    _do_hand_close,
+    _do_hand_open,
+    _do_hand_pose,
+    _do_hand_status,
+)
 from roboclaw.embodied.setup import get_roboclaw_home
 
 
@@ -41,6 +47,12 @@ _ACTION_DESCRIPTIONS = {
     "remove_arm": "Remove one configured arm alias.",
     "set_camera": "Assign a scanned camera to a stable camera name.",
     "remove_camera": "Remove a configured camera.",
+    "set_hand": "Create or update one configured hand alias.",
+    "remove_hand": "Remove a configured hand alias.",
+    "hand_open": "Open all fingers of a dexterous hand.",
+    "hand_close": "Close all fingers of a dexterous hand.",
+    "hand_pose": "Set individual finger positions on a dexterous hand.",
+    "hand_status": "Read current finger angles and forces from a dexterous hand.",
 }
 
 # ---------------------------------------------------------------------------
@@ -51,7 +63,6 @@ _SETUP_ACTIONS = [
     "setup_show", "set_arm", "remove_arm", "rename_arm",
     "set_camera", "remove_camera", "describe", "doctor",
     "set_hand", "remove_hand",
-    "hand_open", "hand_close", "hand_pose", "hand_status",
 ]
 
 _TOOL_GROUPS: dict[str, dict[str, Any]] = {
@@ -59,7 +70,7 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
         "description": (
             "Configure robot hardware: show setup, add/remove/rename arms, "
             "add/remove cameras, describe actions, check environment. "
-            "Also manages Revo2 dexterous hands: set_hand, remove_hand."
+            "Also manages Inspire dexterous hands: set_hand, remove_hand."
         ),
         "actions": _SETUP_ACTIONS,
         "parameters": {
@@ -101,17 +112,8 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
                 },
                 "hand_type": {
                     "type": "string",
-                    "enum": ["revo2_left", "revo2_right"],
+                    "enum": ["inspire_left", "inspire_right"],
                     "description": "Hand hardware type for set_hand.",
-                },
-                "hand_name": {
-                    "type": "string",
-                    "description": "Revo2 hand alias for hand_* actions. Uses first hand if omitted.",
-                },
-                "positions": {
-                    "type": "array",
-                    "items": {"type": "integer"},
-                    "description": "6 finger positions 0–1000 [thumb, index, middle, ring, pinky, wrist] for hand_pose.",
                 },
             },
             "required": ["action"],
@@ -245,19 +247,30 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
                     "type": "string",
                     "description": "ID of a background training job.",
                 },
-                "hand_type": {
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+    },
+    "embodied_hand": {
+        "description": "Control Inspire dexterous hand: open, close, set finger pose, read status.",
+        "actions": ["hand_open", "hand_close", "hand_pose", "hand_status"],
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
                     "type": "string",
-                    "enum": ["revo2_left", "revo2_right"],
-                    "description": "Hand hardware type (for set_hand).",
+                    "enum": ["hand_open", "hand_close", "hand_pose", "hand_status"],
+                    "description": "The hand action to perform.",
                 },
                 "hand_name": {
                     "type": "string",
-                    "description": "Revo2 hand alias (for hand_* actions). Uses first revo2 hand if omitted.",
+                    "description": "Hand alias. Uses first configured hand if omitted.",
                 },
                 "positions": {
                     "type": "array",
                     "items": {"type": "integer"},
-                    "description": "6 finger positions 0–1000 [thumb, index, middle, ring, pinky, wrist] (for hand_pose).",
+                    "description": "6 finger positions 0-1000 [little, ring, middle, index, thumb_bend, thumb_rotation] for hand_pose.",
                 },
             },
             "required": ["action"],
@@ -303,11 +316,12 @@ class EmbodiedToolGroup(Tool):
 # ---------------------------------------------------------------------------
 
 def create_embodied_tools(tty_handoff: Any = None) -> list[EmbodiedToolGroup]:
-    """Return a list of EmbodiedToolGroup instances for all 5 groups."""
+    """Return a list of EmbodiedToolGroup instances for all 6 groups."""
     return [
         EmbodiedToolGroup(name, spec, tty_handoff=tty_handoff)
         for name, spec in _TOOL_GROUPS.items()
     ]
+
 
 # ---------------------------------------------------------------------------
 # Dispatch
@@ -319,6 +333,7 @@ _NO_SETUP_ACTIONS = frozenset({
     "remove_arm", "set_camera", "remove_camera",
     "set_hand", "remove_hand",
 })
+
 
 async def _dispatch(action: str, kwargs: dict[str, Any], tty_handoff: Any) -> str:
     if action in _NO_SETUP_ACTIONS:
@@ -796,60 +811,6 @@ async def _do_job_status(setup: dict[str, Any], kwargs: dict[str, Any], tty_hand
     job_id = kwargs.get("job_id", "")
     status = await LocalLeRobotRunner().job_status(job_id=job_id, log_dir=_logs_dir())
     return "\n".join(f"{key}: {value}" for key, value in status.items())
-
-
-def _resolve_revo2_hand(setup: dict[str, Any], hand_name: str) -> dict | str:
-    """Find a revo2 hand in setup by alias. Returns hand dict or error string."""
-    from roboclaw.embodied.setup import find_hand
-
-    hands = setup.get("hands", [])
-    if not hands:
-        return "No revo2 hand configured. Use set_hand(alias, hand_type, port) to add one."
-    if not hand_name:
-        return hands[0]
-    hand = find_hand(hands, hand_name)
-    if hand is None:
-        return f"No revo2 hand named '{hand_name}' found in setup."
-    return hand
-
-
-async def _do_hand_open(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: Any) -> str:
-    from roboclaw.embodied.embodiment.revo2 import Revo2Controller
-
-    hand = _resolve_revo2_hand(setup, kwargs.get("hand_name", ""))
-    if isinstance(hand, str):
-        return hand
-    return await Revo2Controller().open_hand(hand["port"], hand.get("type"))
-
-
-async def _do_hand_close(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: Any) -> str:
-    from roboclaw.embodied.embodiment.revo2 import Revo2Controller
-
-    hand = _resolve_revo2_hand(setup, kwargs.get("hand_name", ""))
-    if isinstance(hand, str):
-        return hand
-    return await Revo2Controller().close_hand(hand["port"], hand.get("type"))
-
-
-async def _do_hand_pose(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: Any) -> str:
-    from roboclaw.embodied.embodiment.revo2 import Revo2Controller
-
-    hand = _resolve_revo2_hand(setup, kwargs.get("hand_name", ""))
-    if isinstance(hand, str):
-        return hand
-    positions = kwargs.get("positions")
-    if not positions:
-        return "hand_pose requires positions (6 integers 0–1000)."
-    return await Revo2Controller().set_pose(hand["port"], positions, hand.get("type"))
-
-
-async def _do_hand_status(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: Any) -> str:
-    from roboclaw.embodied.embodiment.revo2 import Revo2Controller
-
-    hand = _resolve_revo2_hand(setup, kwargs.get("hand_name", ""))
-    if isinstance(hand, str):
-        return hand
-    return await Revo2Controller().get_status(hand["port"], hand.get("type"))
 
 
 _ASYNC_DISPATCH: dict[str, Any] = {
