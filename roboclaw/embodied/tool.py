@@ -70,7 +70,7 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
         "description": (
             "Configure robot hardware: show setup, add/remove/rename arms, "
             "add/remove cameras, describe actions, check environment. "
-            "Also manages Inspire dexterous hands: set_hand, remove_hand."
+            "Also manages dexterous hands: set_hand, remove_hand."
         ),
         "actions": _SETUP_ACTIONS,
         "parameters": {
@@ -112,7 +112,7 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
                 },
                 "hand_type": {
                     "type": "string",
-                    "enum": ["inspire_left", "inspire_right"],
+                    "enum": ["inspire_rh56", "revo2"],
                     "description": "Hand hardware type for set_hand.",
                 },
             },
@@ -253,7 +253,7 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
         },
     },
     "embodied_hand": {
-        "description": "Control Inspire dexterous hand: open, close, set finger pose, read status.",
+        "description": "Control a dexterous hand: open, close, set finger pose, read status.",
         "actions": ["hand_open", "hand_close", "hand_pose", "hand_status"],
         "parameters": {
             "type": "object",
@@ -463,7 +463,7 @@ _SYNC_DISPATCH: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 
 async def _do_doctor(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: Any) -> str:
-    from roboclaw.embodied.embodiment.so101 import SO101Controller
+    from roboclaw.embodied.embodiment.arm.so101 import SO101Controller
     from roboclaw.embodied.runner import LocalLeRobotRunner
 
     result = await _run(LocalLeRobotRunner(), SO101Controller().doctor())
@@ -486,7 +486,7 @@ async def _do_identify(setup: dict[str, Any], kwargs: dict[str, Any], tty_handof
 
 
 async def _do_calibrate(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: Any) -> str:
-    from roboclaw.embodied.embodiment.so101 import SO101Controller
+    from roboclaw.embodied.embodiment.arm.so101 import SO101Controller
     from roboclaw.embodied.runner import LocalLeRobotRunner
     from roboclaw.embodied.setup import arm_display_name, mark_arm_calibrated
 
@@ -527,7 +527,7 @@ async def _do_calibrate(setup: dict[str, Any], kwargs: dict[str, Any], tty_hando
 
 
 async def _do_teleoperate(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: Any) -> str:
-    from roboclaw.embodied.embodiment.so101 import SO101Controller
+    from roboclaw.embodied.embodiment.arm.so101 import SO101Controller
 
     if not tty_handoff:
         return _NO_TTY_MSG
@@ -595,7 +595,7 @@ async def _do_record(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff:
     if kwargs.get("checkpoint_path"):
         return await _do_run_policy(setup, kwargs, tty_handoff)
 
-    from roboclaw.embodied.embodiment.so101 import SO101Controller
+    from roboclaw.embodied.embodiment.arm.so101 import SO101Controller
     from roboclaw.embodied.runner import LocalLeRobotRunner
 
     if not tty_handoff:
@@ -683,7 +683,7 @@ async def _record_bimanual(
 
 async def _do_run_policy(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: Any) -> str:
     """Run a trained policy - called from record when checkpoint_path is set."""
-    from roboclaw.embodied.embodiment.so101 import SO101Controller
+    from roboclaw.embodied.embodiment.arm.so101 import SO101Controller
     from roboclaw.embodied.learning.act import ACTPipeline
     from roboclaw.embodied.runner import LocalLeRobotRunner
 
@@ -710,7 +710,7 @@ async def _do_run_policy(setup: dict[str, Any], kwargs: dict[str, Any], tty_hand
 
 
 async def _do_replay(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: Any) -> str:
-    from roboclaw.embodied.embodiment.so101 import SO101Controller
+    from roboclaw.embodied.embodiment.arm.so101 import SO101Controller
     from roboclaw.embodied.runner import LocalLeRobotRunner
 
     if not tty_handoff:

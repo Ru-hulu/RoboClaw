@@ -2,7 +2,7 @@
 
 import sys
 
-from roboclaw.embodied.embodiment.so101 import SO101Controller
+from roboclaw.embodied.embodiment.arm.so101 import SO101Controller
 from roboclaw.embodied.learning.act import ACTPipeline
 
 

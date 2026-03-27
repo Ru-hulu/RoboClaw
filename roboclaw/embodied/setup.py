@@ -10,8 +10,8 @@ from typing import Any
 
 _ARM_TYPES = ("so101_follower", "so101_leader")
 _ARM_FIELDS = {"alias", "type", "port", "calibration_dir", "calibrated"}
-_HAND_TYPES = ("inspire_left", "inspire_right")
-_HAND_FIELDS = {"alias", "type", "port"}
+_HAND_TYPES = ("inspire_rh56", "revo2")
+_HAND_FIELDS = {"alias", "type", "port", "slave_id"}
 _CAMERA_FIELDS = {"by_path", "by_id", "dev", "width", "height"}
 _VALID_TOP_KEYS = {"version", "arms", "hands", "cameras", "datasets", "policies", "scanned_ports", "scanned_cameras"}
 
@@ -262,7 +262,11 @@ def set_hand(alias: str, hand_type: str, port: str, *, path: Path | None = None)
     path = path or get_setup_path()
     setup = load_setup(path)
     port = _resolve_port(port, scan_serial_ports())
-    entry: dict[str, Any] = {"alias": alias, "type": hand_type, "port": port}
+
+    # Auto-detect slave_id
+    slave_id = _probe_hand_slave_id(hand_type, port)
+
+    entry: dict[str, Any] = {"alias": alias, "type": hand_type, "port": port, "slave_id": slave_id}
     hands = setup.setdefault("hands", [])
     existing = find_hand(hands, alias)
     if existing is not None:
@@ -271,6 +275,25 @@ def set_hand(alias: str, hand_type: str, port: str, *, path: Path | None = None)
         hands.append(entry)
     save_setup(setup, path)
     return setup
+
+
+def _probe_hand_slave_id(hand_type: str, port: str) -> int:
+    """Auto-detect slave_id by probing the serial port."""
+    _PROBE_MODULES = {
+        "inspire_rh56": "roboclaw.embodied.embodiment.hand.inspire_rh56",
+        "revo2": "roboclaw.embodied.embodiment.hand.revo2",
+    }
+    module_path = _PROBE_MODULES.get(hand_type)
+    if not module_path:
+        raise ValueError(f"No probe available for hand type '{hand_type}'.")
+    import importlib
+    probe_fn = getattr(importlib.import_module(module_path), "probe_slave_ids")
+    found = probe_fn(port)
+    if not found:
+        raise ValueError(f"No {hand_type} hand detected on this port.")
+    if len(found) > 1:
+        raise ValueError(f"Multiple devices detected on this port (found {len(found)}). Only one hand per port is supported.")
+    return found[0]
 
 
 def remove_hand(alias: str, path: Path | None = None) -> dict[str, Any]:

@@ -22,13 +22,28 @@ def _resolve_hand(setup: dict[str, Any], hand_name: str) -> dict:
     return hand
 
 
-def _run_hand_method(method_name: str, setup: dict[str, Any], kwargs: dict[str, Any], extra_args=()):
-    """Resolve hand and call an InspireController method in a thread."""
-    from roboclaw.embodied.embodiment.inspire import InspireController
+def _get_controller(hand_type: str):
+    """Get the appropriate controller for the hand type."""
+    from roboclaw.embodied.tool import ActionError
 
+    if hand_type == "inspire_rh56":
+        from roboclaw.embodied.embodiment.hand.inspire_rh56 import InspireController
+        return InspireController()
+    if hand_type == "revo2":
+        from roboclaw.embodied.embodiment.hand.revo2 import Revo2Controller
+        return Revo2Controller()
+    raise ActionError(f"Unknown hand type: {hand_type}")
+
+
+async def _run_hand_method(method_name: str, setup: dict[str, Any], kwargs: dict[str, Any], extra_args=()):
+    """Resolve hand and call the appropriate controller method."""
     hand = _resolve_hand(setup, kwargs.get("hand_name", ""))
-    method = getattr(InspireController(), method_name)
-    return asyncio.to_thread(method, hand["port"], *extra_args)
+    slave_id = hand["slave_id"]
+    controller = _get_controller(hand["type"])
+    method = getattr(controller, method_name)
+    if asyncio.iscoroutinefunction(method):
+        return await method(hand["port"], *extra_args, slave_id)
+    return await asyncio.to_thread(method, hand["port"], *extra_args, slave_id)
 
 
 async def _do_hand_open(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: Any) -> str:

@@ -748,12 +748,16 @@ def test_calibration_dir_uses_serial_number(setup_file: Path, calibration_root: 
 
 
 def test_set_hand(setup_file: Path) -> None:
-    with std_patch("roboclaw.embodied.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
-        result = set_hand("left_hand", "inspire_left", "/dev/ttyACM0", path=setup_file)
+    with (
+        std_patch("roboclaw.embodied.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS),
+        std_patch("roboclaw.embodied.setup._probe_hand_slave_id", return_value=1),
+    ):
+        result = set_hand("left_hand", "inspire_rh56", "/dev/ttyACM0", path=setup_file)
     hand = find_hand(result["hands"], "left_hand")
     assert hand is not None
-    assert hand["type"] == "inspire_left"
+    assert hand["type"] == "inspire_rh56"
     assert hand["port"] == "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B14032630-if00"
+    assert hand["slave_id"] == 1
     assert "calibration_dir" not in hand
     assert "calibrated" not in hand
     persisted = load_setup(setup_file)
@@ -761,9 +765,12 @@ def test_set_hand(setup_file: Path) -> None:
 
 
 def test_set_hand_replaces_existing(setup_file: Path) -> None:
-    with std_patch("roboclaw.embodied.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
-        set_hand("h", "inspire_left", "/dev/ttyACM0", path=setup_file)
-        result = set_hand("h", "inspire_right", "/dev/ttyACM1", path=setup_file)
+    with (
+        std_patch("roboclaw.embodied.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS),
+        std_patch("roboclaw.embodied.setup._probe_hand_slave_id", return_value=1),
+    ):
+        set_hand("h", "inspire_rh56", "/dev/ttyACM0", path=setup_file)
+        result = set_hand("h", "revo2", "/dev/ttyACM1", path=setup_file)
     assert len(result["hands"]) == 1
     assert find_hand(result["hands"], "h")["port"] == "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B14030892-if00"
 
@@ -775,8 +782,11 @@ def test_set_hand_invalid_type(setup_file: Path) -> None:
 
 
 def test_remove_hand(setup_file: Path) -> None:
-    with std_patch("roboclaw.embodied.scan.scan_serial_ports", return_value=[]):
-        set_hand("left_hand", "inspire_left", "/dev/ttyUSB0", path=setup_file)
+    with (
+        std_patch("roboclaw.embodied.scan.scan_serial_ports", return_value=[]),
+        std_patch("roboclaw.embodied.setup._probe_hand_slave_id", return_value=1),
+    ):
+        set_hand("left_hand", "inspire_rh56", "/dev/ttyUSB0", path=setup_file)
     result = remove_hand("left_hand", path=setup_file)
     assert find_hand(result["hands"], "left_hand") is None
 
@@ -788,8 +798,8 @@ def test_remove_hand_missing(setup_file: Path) -> None:
 
 def test_find_hand() -> None:
     hands = [
-        {"alias": "left", "type": "inspire_left", "port": "/dev/ttyUSB0"},
-        {"alias": "right", "type": "inspire_right", "port": "/dev/ttyUSB1"},
+        {"alias": "left", "type": "inspire_rh56", "port": "/dev/ttyUSB0", "slave_id": 1},
+        {"alias": "right", "type": "revo2", "port": "/dev/ttyUSB1", "slave_id": 126},
     ]
     assert find_hand(hands, "left") == hands[0]
     assert find_hand(hands, "right") == hands[1]
@@ -840,4 +850,4 @@ def test_setup_schema_has_no_hand_runtime_params() -> None:
     assert "positions" not in props
     # hand_type SHOULD be in setup (for set_hand)
     assert "hand_type" in props
-    assert props["hand_type"]["enum"] == ["inspire_left", "inspire_right"]
+    assert props["hand_type"]["enum"] == ["inspire_rh56", "revo2"]

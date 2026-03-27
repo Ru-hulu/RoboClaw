@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from roboclaw.embodied.embodiment.inspire import (
+from roboclaw.embodied.embodiment.hand.inspire_rh56 import (
     InspireController,
     _FINGER_LABELS,
     _REG_ANGLE_ACT,
@@ -16,7 +16,7 @@ from roboclaw.embodied.embodiment.inspire import (
 PORT = "/dev/ttyUSB0"
 
 
-# ── Unit tests (mocked Modbus) ──────────────────────────────────────
+# -- Unit tests (mocked Modbus) --
 
 
 def _mock_bus():
@@ -31,7 +31,7 @@ def _mock_bus():
 def _patch_session(bus):
     """Return a patch that replaces _session with a context manager yielding *bus*."""
     @contextmanager
-    def _fake_session(port, hand_id):
+    def _fake_session(port, slave_id):
         yield bus
 
     return patch.object(InspireController, "_session", staticmethod(_fake_session))
@@ -100,23 +100,23 @@ def test_finger_labels() -> None:
     assert _FINGER_LABELS == ("little", "ring", "middle", "index", "thumb_bend", "thumb_rotation")
 
 
-# ── Hardware integration tests ────────────────────────────────────────
+# -- Hardware integration tests --
 
 
 @pytest.mark.hardware
 def test_hw_get_status() -> None:
-    result = InspireController().get_status(PORT, hand_id=2)
+    result = InspireController().get_status(PORT, slave_id=2)
     assert "angles=" in result
     assert "forces=" in result
 
 
 @pytest.mark.hardware
 def test_hw_open_hand() -> None:
-    result = InspireController().open_hand(PORT, hand_id=2)
+    result = InspireController().open_hand(PORT, slave_id=2)
     assert result == "Hand opened."
 
 
 @pytest.mark.hardware
 def test_hw_close_hand() -> None:
-    result = InspireController().close_hand(PORT, hand_id=2)
+    result = InspireController().close_hand(PORT, slave_id=2)
     assert result == "Hand closed."
