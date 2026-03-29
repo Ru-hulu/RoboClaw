@@ -21,8 +21,37 @@ def _read_symlink_map(directory: str) -> dict[str, str]:
     return result
 
 
+def _list_serial_ports() -> list[str]:
+    """Return ports using the same discovery scope as lerobot-find-port.
+
+    On Windows, lerobot uses pyserial COM-port enumeration. On Unix-like
+    systems, it scans every `/dev/tty*` entry. RoboClaw mirrors that behavior
+    so any port visible to the official helper is also visible here.
+    """
+    try:
+        from serial.tools import list_ports
+    except ImportError:
+        list_ports = None
+
+    if os.name == "nt":
+        if list_ports is None:
+            return []
+        return sorted(
+            port.device
+            for port in list_ports.comports()
+            if getattr(port, "device", "")
+        )
+
+    return sorted(str(path) for path in Path("/dev").glob("tty*"))
+
+
 def scan_serial_ports() -> list[dict[str, str]]:
-    """Scan serial devices, return list with by_path, by_id, dev."""
+    """Scan serial devices, return list with by_path, by_id, dev.
+
+    Discovery scope is intentionally aligned with `lerobot-find-port`, while
+    Linux symlink trees are still attached as stable `/dev/serial/by-*`
+    aliases when available.
+    """
     from roboclaw.embodied.stub import is_stub_mode, stub_ports
 
     if is_stub_mode():
@@ -30,7 +59,7 @@ def scan_serial_ports() -> list[dict[str, str]]:
 
     by_path = _read_symlink_map("/dev/serial/by-path")
     by_id = _read_symlink_map("/dev/serial/by-id")
-    all_devs = set(by_path.keys()) | set(by_id.keys())
+    all_devs = set(_list_serial_ports()) | set(by_path.keys()) | set(by_id.keys())
     ports = []
     for dev in sorted(all_devs):
         if not os.path.exists(dev):

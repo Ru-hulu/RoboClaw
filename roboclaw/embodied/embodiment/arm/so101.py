@@ -25,7 +25,10 @@ class SO101Controller:
             "print(f'supported_cameras: {lerobot.available_cameras}'); "
             "by_id = sorted(glob.glob('/dev/serial/by-id/*')); "
             "pairs = [(p, os.path.realpath(p)) for p in by_id]; "
-            "print(f'connected_ports_by_id: {pairs}')"
+            "print(f'connected_ports_by_id: {pairs}'); "
+            "from serial.tools import list_ports; "
+            "ports = sorted(p.device for p in list_ports.comports() if getattr(p, 'device', '')); "
+            "print(f'connected_ports: {ports}')"
         )
         return ["python3", "-c", script]
 

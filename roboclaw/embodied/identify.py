@@ -6,6 +6,7 @@ Run via: python -m roboclaw.embodied.identify <scanned_ports_json>
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 from roboclaw.embodied.scan import restore_stderr, suppress_stderr
@@ -81,6 +82,25 @@ def _confirm(prompt: str) -> bool:
         print("Please enter Y or n.")
 
 
+def _port_candidates(port_path: str) -> list[str]:
+    """Return candidate device paths to try for a scanned port.
+
+    We keep RoboClaw's scan scope aligned with `lerobot-find-port`, which on
+    Unix includes `/dev/tty*`. On macOS, however, the callable endpoint for
+    serial traffic is often the matching `/dev/cu.*`. Try both, without
+    changing the user-visible scanned range.
+    """
+    candidates = [port_path]
+    if sys.platform == "darwin":
+        name = os.path.basename(port_path)
+        if name.startswith("tty."):
+            candidates.append(port_path.replace("/dev/tty.", "/dev/cu.", 1))
+        elif name.startswith("cu."):
+            candidates.append(port_path.replace("/dev/cu.", "/dev/tty.", 1))
+    seen: set[str] = set()
+    return [path for path in candidates if path and not (path in seen or seen.add(path))]
+
+
 def probe_port(port_path: str, baudrate: int = DEFAULT_BAUDRATE) -> list[int]:
     """Try reading Present_Position for motor IDs 1-6. Return responding IDs."""
     from roboclaw.embodied.stub import is_stub_mode, stub_motor_ids
@@ -89,18 +109,29 @@ def probe_port(port_path: str, baudrate: int = DEFAULT_BAUDRATE) -> list[int]:
         return stub_motor_ids(port_path)
     import scservo_sdk as scs
 
-    handler = scs.PortHandler(port_path)
-    if not handler.openPort():
-        return []
-    handler.setBaudRate(baudrate)
-    packet = scs.PacketHandler(0)
-    found = []
-    for mid in MOTOR_IDS:
-        val, result, _ = packet.read2ByteTxRx(handler, mid, PRESENT_POS_ADDR)
-        if result == scs.COMM_SUCCESS:
-            found.append(mid)
-    handler.closePort()
-    return found
+    for candidate in _port_candidates(port_path):
+        handler = scs.PortHandler(candidate)
+        try:
+            if not handler.openPort():
+                continue
+            handler.setBaudRate(baudrate)
+            packet = scs.PacketHandler(0)
+            found = []
+            for mid in MOTOR_IDS:
+                val, result, _ = packet.read2ByteTxRx(handler, mid, PRESENT_POS_ADDR)
+                if result == scs.COMM_SUCCESS:
+                    found.append(mid)
+            if found:
+                return found
+        except Exception:
+            continue
+        finally:
+            try:
+                if getattr(handler, "is_open", False):
+                    handler.closePort()
+            except Exception:
+                pass
+    return []
 
 
 def read_positions(
@@ -113,18 +144,29 @@ def read_positions(
         return {mid: 0 for mid in motor_ids}
     import scservo_sdk as scs
 
-    handler = scs.PortHandler(port_path)
-    if not handler.openPort():
-        return {}
-    handler.setBaudRate(baudrate)
-    packet = scs.PacketHandler(0)
-    positions: dict[int, int] = {}
-    for mid in motor_ids:
-        val, result, _ = packet.read2ByteTxRx(handler, mid, PRESENT_POS_ADDR)
-        if result == scs.COMM_SUCCESS:
-            positions[mid] = val
-    handler.closePort()
-    return positions
+    for candidate in _port_candidates(port_path):
+        handler = scs.PortHandler(candidate)
+        try:
+            if not handler.openPort():
+                continue
+            handler.setBaudRate(baudrate)
+            packet = scs.PacketHandler(0)
+            positions: dict[int, int] = {}
+            for mid in motor_ids:
+                val, result, _ = packet.read2ByteTxRx(handler, mid, PRESENT_POS_ADDR)
+                if result == scs.COMM_SUCCESS:
+                    positions[mid] = val
+            if positions:
+                return positions
+        except Exception:
+            continue
+        finally:
+            try:
+                if getattr(handler, "is_open", False):
+                    handler.closePort()
+            except Exception:
+                pass
+    return {}
 
 
 def detect_motion(baseline: dict[int, int], current: dict[int, int]) -> int:
@@ -153,17 +195,35 @@ def _probe_single_port(port: dict) -> dict | None:
     path = _resolve_port_path(port)
     if not path:
         return None
-    ids = probe_port(path)
+    try:
+        ids = probe_port(path)
+    except Exception:
+        return None
     if not ids:
         return None
     return {**port, "motor_ids": ids}
+
+
+def _probe_priority(port: dict) -> tuple[int, str]:
+    """Rank ports so likely USB/robot devices are probed before generic tty nodes."""
+    path = _resolve_port_path(port).lower()
+    if any(token in path for token in ("/dev/serial/by-id/", "/dev/serial/by-path/", "usbmodem", "usbserial", "ttyacm", "ttyusb", "cu.usb")):
+        return (0, path)
+    return (1, path)
 
 
 def _filter_feetech_ports(scanned_ports: list[dict]) -> list[dict]:
     """Probe each port, keep only those with Feetech motors. Attach motor_ids."""
     saved = suppress_stderr()
     try:
-        results = [_probe_single_port(p) for p in scanned_ports]
+        ordered = sorted(scanned_ports, key=_probe_priority)
+        primary = [p for p in ordered if _probe_priority(p)[0] == 0]
+        fallback = [p for p in ordered if _probe_priority(p)[0] != 0]
+        results = [_probe_single_port(p) for p in primary]
+        found = [r for r in results if r is not None]
+        if found:
+            return found
+        results = [_probe_single_port(p) for p in fallback]
     finally:
         restore_stderr(saved)
     return [r for r in results if r is not None]
