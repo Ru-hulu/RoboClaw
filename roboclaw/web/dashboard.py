@@ -270,8 +270,15 @@ def register_dashboard_routes(
         recording = app.state.active_recording
         if recording is not None and recording.active:
             raise HTTPException(
-                status_code=409,
-                detail="Cannot preview camera while recording is active",
+                status_code=503,
+                detail="Camera busy: recording active",
+            )
+        from roboclaw.embodied.web.app import get_session
+        session_state = get_session().state
+        if session_state in ("teleoperating", "recording"):
+            raise HTTPException(
+                status_code=503,
+                detail=f"Camera busy: {session_state}",
             )
         setup = load_setup()
         cam = next((c for c in setup.get("cameras", []) if c.get("alias") == alias), None)
