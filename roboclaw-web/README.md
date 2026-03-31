@@ -1,13 +1,11 @@
 # RoboClaw Web UI
 
-RoboClaw 的 Web 用户界面，提供可视化的机器人控制、监控和数据集管理能力。
+RoboClaw 的 Web 用户界面，提供与 RoboClaw agent 的实时对话能力。
 
 ## 功能
 
 - **对话界面**: 与 RoboClaw agent 实时对话
-- **机器人监控**: 实时状态显示和传感器数据可视化（即将推出）
-- **控制面板**: 遥操作和控制界面（即将推出）
-- **数据集工作台**: 数据集管理和标注（即将推出）
+- **设置**: 配置 AI provider (API base / API key)
 
 ## 开发
 
@@ -47,14 +45,10 @@ npm run build
 src/
 ├── features/          # 功能模块
 │   ├── chat/         # 对话界面
-│   ├── control/      # 控制面板
-│   ├── monitor/      # 监控面板
-│   └── workbench/    # 数据集工作台
+│   └── settings/     # 设置页面
 ├── shared/           # 共享代码
 │   ├── components/   # 共享组件
-│   ├── hooks/        # 自定义 hooks
-│   ├── api/          # API 客户端
-│   └── utils/        # 工具函数
+│   └── api/          # API 客户端
 └── assets/           # 静态资源
 ```
 
