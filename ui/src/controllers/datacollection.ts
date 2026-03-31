@@ -56,9 +56,14 @@ const API = '/api/embodied'
 
 async function api(url: string, opts?: RequestInit) {
   const r = await fetch(url, opts)
-  const j = await r.json()
+  let j: any
+  try {
+    j = await r.json()
+  } catch {
+    throw new Error(`HTTP ${r.status}: ${r.statusText}`)
+  }
   if (!r.ok || j.error) {
-    throw new Error(j.error || j.message || `HTTP ${r.status}`)
+    throw new Error(j.detail || j.error || j.message || `HTTP ${r.status}`)
   }
   return j
 }

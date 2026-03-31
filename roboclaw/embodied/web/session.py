@@ -25,9 +25,9 @@ def _build_follower_config(arm: dict, cameras: dict):
     if arm_type == "koch_follower":
         from lerobot.robots.koch_follower.config_koch_follower import KochFollowerConfig
         return KochFollowerConfig(port=port, calibration_dir=cal_dir, cameras=cameras)
-    if arm_type == "so101_follower":
-        from lerobot.robots.so101_follower.config_so101_follower import SO101FollowerConfig
-        return SO101FollowerConfig(port=port, calibration_dir=cal_dir, cameras=cameras)
+    if arm_type in ("so101_follower", "so_follower"):
+        from lerobot.robots.so_follower.config_so_follower import SOFollowerConfig
+        return SOFollowerConfig(port=port, calibration_dir=cal_dir, cameras=cameras)
     raise ValueError(f"Unsupported follower arm type: {arm_type}")
 
 
@@ -40,9 +40,9 @@ def _build_leader_config(arm: dict):
     if arm_type == "koch_leader":
         from lerobot.teleoperators.koch_leader.config_koch_leader import KochLeaderConfig
         return KochLeaderConfig(port=port, calibration_dir=cal_dir)
-    if arm_type == "so101_leader":
-        from lerobot.teleoperators.so101_leader.config_so101_leader import SO101LeaderConfig
-        return SO101LeaderConfig(port=port, calibration_dir=cal_dir)
+    if arm_type in ("so101_leader", "so_leader"):
+        from lerobot.teleoperators.so_leader.config_so_leader import SOLeaderConfig
+        return SOLeaderConfig(port=port, calibration_dir=cal_dir)
     raise ValueError(f"Unsupported leader arm type: {arm_type}")
 
 
