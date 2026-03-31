@@ -165,11 +165,19 @@ async def servo_positions() -> dict[str, Any]:
     """Read raw positions of all servo motors on all follower arms.
 
     Only works when NOT teleoperating/recording (serial port would be busy).
+    Acquires session lock to prevent race with start_teleop/start_recording.
     """
     session = _session()
-    if session.state in ("teleoperating", "recording"):
+    if session.cameras_locked:
         return {"error": "busy", "arms": {}}
-    return await asyncio.to_thread(_read_servo_positions)
+    return await asyncio.to_thread(_read_servo_positions_locked, session)
+
+
+def _read_servo_positions_locked(session: Any) -> dict[str, Any]:
+    with session._lock:
+        if session.cameras_locked:
+            return {"error": "busy", "arms": {}}
+        return _read_servo_positions()
 
 
 def _read_servo_positions() -> dict[str, Any]:
