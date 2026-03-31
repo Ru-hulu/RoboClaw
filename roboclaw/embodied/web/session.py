@@ -44,8 +44,8 @@ class RobotSession:
 
     @property
     def cameras_locked(self) -> bool:
-        """True when cameras must not be opened (teleop/record owns the devices)."""
-        return self._state in ("teleoperating", "recording")
+        """True when cameras/serial must not be opened (teleop/record owns the devices)."""
+        return self._state in ("preparing", "teleoperating", "recording")
 
     def _require_state(self, *allowed: str) -> None:
         if self._state not in allowed:
@@ -80,9 +80,11 @@ class RobotSession:
     def start_teleop(self, fps: int = 30) -> None:
         with self._lock:
             self._require_state("connected")
+            self._state = "preparing"
+        import time; time.sleep(5)
+        with self._lock:
             argv = self._build_teleop_argv()
             self._state = "teleoperating"
-            import time; time.sleep(3)
             self._launch_subprocess(argv)
             logger.info("Teleoperation started")
 
@@ -105,10 +107,12 @@ class RobotSession:
             if self._state == "teleoperating":
                 self._kill_subprocess()
 
-            argv = self._build_record_argv(dataset_name, task, fps, num_episodes)
             self._recording_dataset = dataset_name
+            self._state = "preparing"
+        import time; time.sleep(5)
+        with self._lock:
+            argv = self._build_record_argv(dataset_name, task, fps, num_episodes)
             self._state = "recording"
-            import time; time.sleep(3)
             self._launch_subprocess(argv)
             logger.info("Recording started: dataset={}, episodes={}", dataset_name, num_episodes)
 

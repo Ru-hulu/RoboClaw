@@ -62,12 +62,14 @@ export default function DataCollectionView() {
   const stateLabel: Record<RobotState, string> = {
     disconnected: t('stateDisconnected'),
     connected: t('stateConnected'),
+    preparing: t('hwInitializing'),
     teleoperating: t('stateTeleoperating'),
     recording: t('stateRecording'),
   }
   const stateBadgeCls: Record<RobotState, string> = {
     disconnected: 'bg-rd/10 text-rd',
     connected: 'bg-gn/10 text-gn',
+    preparing: 'bg-yl/10 text-yl',
     teleoperating: 'bg-ac/10 text-ac',
     recording: 'bg-yl/10 text-yl',
   }

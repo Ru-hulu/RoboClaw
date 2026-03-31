@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type RobotState = 'disconnected' | 'connected' | 'teleoperating' | 'recording'
+export type RobotState = 'disconnected' | 'connected' | 'preparing' | 'teleoperating' | 'recording'
 
 interface LogEntry {
   time: string
@@ -227,6 +227,7 @@ export const useDataCollection = create<DataCollectionStore>((set, get) => ({
         const stateMap: Record<string, RobotState> = {
           disconnected: 'disconnected',
           connected: 'connected',
+          preparing: 'preparing',
           teleoperating: 'teleoperating',
           recording: 'recording',
         }

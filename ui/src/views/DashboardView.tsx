@@ -220,9 +220,10 @@ function canDo(state: RobotState) {
   const conn = state === 'connected'
   const tele = state === 'teleoperating'
   const rec = state === 'recording'
+  const prep = state === 'preparing'
   return {
     connect: disc,
-    disconnect: !disc,
+    disconnect: !disc && !prep,
     teleopStart: conn,
     teleopStop: tele,
     recStart: conn || tele,
@@ -244,11 +245,13 @@ export default function DashboardView() {
   const stateLabel: Record<RobotState, string> = {
     disconnected: t('stateDisconnected'),
     connected: t('stateConnected'),
+    preparing: t('hwInitializing'),
     teleoperating: t('stateTeleoperating'),
     recording: t('stateRecording'),
   }
   const stateBadgeCls: Record<RobotState, string> = {
     disconnected: 'bg-rd/10 text-rd',
+    preparing: 'bg-yl/10 text-yl',
     connected: 'bg-gn/10 text-gn',
     teleoperating: 'bg-ac/10 text-ac',
     recording: 'bg-yl/10 text-yl',
