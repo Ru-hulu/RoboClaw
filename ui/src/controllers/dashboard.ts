@@ -41,6 +41,7 @@ export interface SessionStatus {
   elapsed_seconds: number
   dataset: string | null
   rerun_web_port: number
+  error: string
 }
 
 export interface Fault {
@@ -141,6 +142,7 @@ const defaultSession: SessionStatus = {
   elapsed_seconds: 0,
   dataset: null,
   rerun_web_port: 0,
+  error: '',
 }
 
 // ---------------------------------------------------------------------------
@@ -347,6 +349,7 @@ export const useDashboard = create<DashboardStore>((set, get) => ({
           elapsed_seconds: event.elapsed_seconds ?? 0,
           dataset: event.dataset || null,
           rerun_web_port: event.rerun_web_port || 0,
+          error: event.error || '',
         },
       })
       return

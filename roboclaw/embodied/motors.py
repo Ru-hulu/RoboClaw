@@ -40,7 +40,7 @@ def _motor_config_from_calibration(arm: dict[str, Any]) -> dict[str, tuple[int, 
 
 
 def read_servo_positions(setup: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Read current servo positions for all follower arms.
+    """Read current servo positions for all arms (followers + leaders).
 
     Returns ``{"error": None, "arms": {alias: {motor_name: position}}}``.
     """
@@ -49,14 +49,14 @@ def read_servo_positions(setup: dict[str, Any] | None = None) -> dict[str, Any]:
     arms = setup.get("arms", [])
     result: dict[str, Any] = {"error": None, "arms": {}}
 
-    follower_arms = [a for a in arms if "follower" in a.get("type", "") and a.get("port")]
-    if not follower_arms:
+    active_arms = [a for a in arms if a.get("port")]
+    if not active_arms:
         return result
 
     from lerobot.motors.feetech import FeetechMotorsBus
     from lerobot.motors.motors_bus import Motor, MotorNormMode
 
-    for arm in follower_arms:
+    for arm in active_arms:
         alias = arm.get("alias", "")
         port = arm["port"]
         motor_config = _motor_config_from_calibration(arm)

@@ -297,6 +297,20 @@ export default function DashboardView() {
         )}
       </div>
 
+      {/* Error banner */}
+      {session.error && (
+        <div className="px-4 py-2 bg-rd/10 border-b border-rd/30 text-rd text-sm font-mono whitespace-pre-wrap">
+          {session.error}
+        </div>
+      )}
+
+      {/* Hardware readiness warning */}
+      {!hwReady && hwStatus && (
+        <div className="px-4 py-2 bg-yl/10 border-b border-yl/30 text-yl text-sm">
+          {hwStatus.missing.join(' · ')}
+        </div>
+      )}
+
       {/* Rerun visualization */}
       {session.rerun_web_port > 0 && (state === 'teleoperating' || state === 'recording') && (
         <div className="border-b border-bd bg-black/5">

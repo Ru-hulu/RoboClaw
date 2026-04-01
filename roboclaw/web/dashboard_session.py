@@ -56,6 +56,8 @@ class DashboardSession:
         self._rerun_process: asyncio.subprocess.Process | None = None
         self._rerun_grpc_port = 0
         self._rerun_web_port = 0
+        self._error_message = ""
+        self._stderr_lines: list[str] = []
 
         # Recording metadata
         self._dataset_name = ""
@@ -89,12 +91,15 @@ class DashboardSession:
             "elapsed_seconds": round(elapsed, 1),
             "dataset": self._dataset_name if self._state == "recording" else None,
             "rerun_web_port": self._rerun_web_port if self._rerun_process else 0,
+            "error": self._error_message,
         }
 
     # -- Lifecycle ---------------------------------------------------------
 
     async def start_teleop(self) -> None:
         self._require_idle_or_raise()
+        self._error_message = ""
+        self._stderr_lines = []
         setup = load_setup()
         await self._start_rerun_server()
         try:
@@ -114,6 +119,8 @@ class DashboardSession:
         reset_time_s: int = 10,
     ) -> str:
         """Start recording. Returns the generated dataset_name."""
+        self._error_message = ""
+        self._stderr_lines = []
         if self._state == "teleoperating":
             await self._kill_subprocess()
             self._set_state("idle")
@@ -189,36 +196,48 @@ class DashboardSession:
         }
 
     async def _start_rerun_server(self) -> bool:
-        """Start a Rerun server for web visualization. Returns True on success."""
+        """Start a Rerun server, auto-retry on port conflict. Returns True on success."""
         if self._rerun_process is not None:
             return True
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "rerun", "--serve-web",
-                "--port", str(_RERUN_GRPC_PORT),
-                "--web-viewer-port", str(_RERUN_WEB_PORT),
-                "--bind", _RERUN_BIND,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            # Poll until process exits or port is ready (max 2s)
-            for _ in range(40):
+        grpc_port = _RERUN_GRPC_PORT
+        web_port = _RERUN_WEB_PORT
+        for attempt in range(5):
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "rerun", "--serve-web",
+                    "--port", str(grpc_port),
+                    "--web-viewer-port", str(web_port),
+                    "--bind", _RERUN_BIND,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                for _ in range(40):
+                    if proc.returncode is not None:
+                        break
+                    await asyncio.sleep(0.05)
                 if proc.returncode is not None:
                     stderr = await proc.stderr.read() if proc.stderr else b""
-                    logger.warning("Rerun server exited (code={}): {}", proc.returncode, stderr.decode(errors="replace")[:200])
+                    msg = stderr.decode(errors="replace")[:200]
+                    if "Address already in use" in msg:
+                        logger.info("Rerun port {} in use, trying next", web_port)
+                        grpc_port += 2
+                        web_port += 2
+                        continue
+                    logger.warning("Rerun server exited (code={}): {}", proc.returncode, msg)
                     return False
-                await asyncio.sleep(0.05)
-            self._rerun_process = proc
-            self._rerun_grpc_port = _RERUN_GRPC_PORT
-            self._rerun_web_port = _RERUN_WEB_PORT
-            logger.info("Rerun server started (gRPC={}, web={})", _RERUN_GRPC_PORT, _RERUN_WEB_PORT)
-            return True
-        except FileNotFoundError:
-            logger.warning("Rerun CLI not found — visualization disabled")
-            return False
-        except OSError as exc:
-            logger.warning("Failed to start Rerun server: {}", exc)
-            return False
+                self._rerun_process = proc
+                self._rerun_grpc_port = grpc_port
+                self._rerun_web_port = web_port
+                logger.info("Rerun server started (gRPC={}, web={})", grpc_port, web_port)
+                return True
+            except FileNotFoundError:
+                logger.warning("Rerun CLI not found — visualization disabled")
+                return False
+            except OSError as exc:
+                logger.warning("Failed to start Rerun server: {}", exc)
+                return False
+        logger.warning("Rerun: all port attempts exhausted")
+        return False
 
     async def _stop_rerun_server(self) -> None:
         proc = self._rerun_process
@@ -293,17 +312,27 @@ class DashboardSession:
             if not line:
                 continue
             logger.info("subprocess: {}", line)
+            # Capture error-like lines for crash reporting
+            if any(kw in line for kw in ("Error", "Traceback", "Exception", "FATAL")):
+                self._stderr_lines.append(line)
+                if len(self._stderr_lines) > 20:
+                    self._stderr_lines = self._stderr_lines[-20:]
             if self._parse_line(line):
                 await self._emit_state_change(self.get_status())
 
     async def _wait_for_exit(self, proc: asyncio.subprocess.Process) -> None:
         """Wait for subprocess to exit and clean up session state."""
-        # Wait for stdout reader to finish first
         if self._stdout_task is not None:
             await self._stdout_task
         await proc.wait()
         returncode = proc.returncode
         logger.info("Subprocess exited with code {}", returncode)
+        # Detect crash and set error message
+        if returncode not in (0, None, -2, -15):  # not OK / SIGINT / SIGTERM
+            tail = "\n".join(self._stderr_lines[-5:]) if self._stderr_lines else ""
+            self._error_message = f"Process exited with code {returncode}"
+            if tail:
+                self._error_message += f"\n{tail}"
         # Clean up
         self._close_stdin()
         self._process = None
