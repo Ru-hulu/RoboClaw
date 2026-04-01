@@ -447,8 +447,8 @@ def create_app(
     from roboclaw.embodied.web.routes import router as embodied_router
     app.include_router(embodied_router)
 
-    # 14. Serve built frontend in production (ui/dist/)
-    ui_dist = Path(__file__).resolve().parent.parent.parent / "ui" / "dist"
+    # 14. Serve built frontend in production (roboclaw-web/ui/dist/)
+    ui_dist = Path(__file__).resolve().parent.parent.parent / "roboclaw-web" / "ui" / "dist"
     if ui_dist.is_dir():
         from starlette.staticfiles import StaticFiles
         from starlette.responses import FileResponse
