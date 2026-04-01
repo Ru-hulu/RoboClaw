@@ -510,6 +510,30 @@ def create_app(
 # ------------------------------------------------------------------
 
 
+def _check_device_permissions() -> None:
+    """Check serial/camera device permissions at startup, auto-fix if possible."""
+    import glob
+    import os
+    import sys
+
+    if sys.platform != "linux":
+        return
+    devices = glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*")
+    if not devices:
+        return
+    denied = [d for d in devices if not os.access(d, os.R_OK | os.W_OK)]
+    if not denied:
+        return
+    logger.warning("Serial devices without permission: {}", denied)
+    from roboclaw.web.dashboard_setup import _try_fix_serial_permissions
+    if _try_fix_serial_permissions():
+        logger.info("Auto-fixed serial device permissions")
+    else:
+        logger.warning(
+            "Cannot auto-fix serial permissions. Run: bash scripts/setup-udev.sh"
+        )
+
+
 def main(
     *,
     config_path: str | None = None,
@@ -520,6 +544,7 @@ def main(
     """Run the web server with uvicorn."""
     import uvicorn
 
+    _check_device_permissions()
     app = create_app(config_path=config_path, workspace=workspace, host=host, port=port)
     logger.info("Starting RoboClaw Web UI at http://{}:{}", app.state.web_host, app.state.web_port)
     uvicorn.run(app, host=app.state.web_host, port=app.state.web_port, log_level="info")

@@ -24,6 +24,7 @@ from roboclaw.embodied.ops.helpers import (
     prepare_record,
     prepare_teleop,
 )
+from roboclaw.embodied.port_lock import port_locks
 from roboclaw.embodied.runner import LocalLeRobotRunner
 from roboclaw.embodied.setup import load_setup
 
@@ -50,6 +51,7 @@ class DashboardSession:
         self._wait_task: asyncio.Task | None = None
         self._cancel_prepare = asyncio.Event()
         self._temp_dirs: list[str] = []
+        self._held_port_locks: list[str] = []
 
         # Recording metadata
         self._dataset_name = ""
@@ -200,6 +202,12 @@ class DashboardSession:
             self._cleanup_temp_dirs()
             self._set_state("idle")
             return
+        # Acquire port locks for all arm serial ports before launching subprocess
+        setup = load_setup()
+        arm_ports = [arm["port"] for arm in setup.get("arms", []) if arm.get("port")]
+        for port in sorted(set(arm_ports)):
+            await port_locks._get_lock(port).acquire()
+        self._held_port_locks = sorted(set(arm_ports))
         await self._launch_subprocess(argv)
         self._set_state(target_state)
 
@@ -244,6 +252,7 @@ class DashboardSession:
         # Clean up
         self._close_stdin()
         self._process = None
+        self._release_port_locks()
         self._cleanup_temp_dirs()
         self._episode_phase = ""
         self._set_state("idle")
@@ -313,6 +322,7 @@ class DashboardSession:
         await self._await_stdout_task()
         self._close_stdin()
         self._process = None
+        self._release_port_locks()
         self._cleanup_temp_dirs()
 
     async def _kill_subprocess(self) -> None:
@@ -326,6 +336,7 @@ class DashboardSession:
             self._process.kill()
         await self._await_stdout_task()
         self._process = None
+        self._release_port_locks()
         self._cleanup_temp_dirs()
 
     async def _await_stdout_task(self) -> None:
@@ -364,6 +375,13 @@ class DashboardSession:
         for d in self._temp_dirs:
             shutil.rmtree(d, ignore_errors=True)
         self._temp_dirs.clear()
+
+    def _release_port_locks(self) -> None:
+        for port in self._held_port_locks:
+            lock = port_locks._get_lock(port)
+            if lock.locked():
+                lock.release()
+        self._held_port_locks = []
 
     def _set_state(self, new_state: str) -> None:
         if self._state == new_state:

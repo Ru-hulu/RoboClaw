@@ -115,40 +115,32 @@ def _datasets_root() -> Path:
 # Servo position reading (blocking — run in thread)
 # ---------------------------------------------------------------------------
 
-def _read_servo_positions() -> dict[str, Any]:
-    setup = load_setup()
-    arms = setup.get("arms", [])
-    result: dict[str, Any] = {"error": None, "arms": {}}
-    motor_names = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
+_MOTOR_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
 
-    for arm in arms:
-        if "follower" not in arm.get("type", ""):
-            continue
-        alias = arm.get("alias", "")
-        port = arm.get("port", "")
-        if not port:
-            continue
-        try:
-            from lerobot.motors.feetech import FeetechMotorsBus
-            from lerobot.motors.motors_bus import Motor, MotorNormMode
 
-            motors = {
-                name: Motor(id=i + 1, model="sts3215", norm_mode=MotorNormMode.RANGE_M100_100)
-                for i, name in enumerate(motor_names)
-            }
-            bus = FeetechMotorsBus(port=port, motors=motors)
-            bus.connect()
-            positions = {}
-            for name in motor_names:
-                try:
-                    positions[name] = int(bus.read("Present_Position", name, normalize=False))
-                except Exception:
-                    positions[name] = None
-            bus.disconnect()
-            result["arms"][alias] = positions
-        except Exception as e:
-            result["arms"][alias] = {"error": str(e)}
-    return result
+def _read_one_arm(arm: dict[str, Any]) -> dict[str, Any]:
+    """Read servo positions for a single follower arm. Blocking — run in thread."""
+    port = arm.get("port", "")
+    try:
+        from lerobot.motors.feetech import FeetechMotorsBus
+        from lerobot.motors.motors_bus import Motor, MotorNormMode
+
+        motors = {
+            name: Motor(id=i + 1, model="sts3215", norm_mode=MotorNormMode.RANGE_M100_100)
+            for i, name in enumerate(_MOTOR_NAMES)
+        }
+        bus = FeetechMotorsBus(port=port, motors=motors)
+        bus.connect()
+        positions = {}
+        for name in _MOTOR_NAMES:
+            try:
+                positions[name] = int(bus.read("Present_Position", name, normalize=False))
+            except Exception:
+                positions[name] = None
+        bus.disconnect()
+        return positions
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +258,20 @@ def register_dashboard_routes(
     async def servo_positions() -> dict[str, Any]:
         if session.busy:
             return {"error": "busy", "arms": {}}
-        return await asyncio.to_thread(_read_servo_positions)
+        from roboclaw.embodied.port_lock import port_locks
+        setup = load_setup()
+        result: dict[str, Any] = {"error": None, "arms": {}}
+        for arm in setup.get("arms", []):
+            if "follower" not in arm.get("type", ""):
+                continue
+            port = arm.get("port", "")
+            alias = arm.get("alias", "")
+            if not port:
+                continue
+            async with port_locks.acquire(port):
+                positions = await asyncio.to_thread(_read_one_arm, arm)
+            result["arms"][alias] = positions
+        return result
 
     # -- Troubleshooting ---------------------------------------------------
 
@@ -293,3 +298,8 @@ def register_dashboard_routes(
     async def network_info() -> dict[str, Any]:
         host, port = get_config()
         return {"host": host, "port": port, "lan_ip": _get_lan_ip()}
+
+    # -- Setup wizard routes -----------------------------------------------
+
+    from roboclaw.web.dashboard_setup import register_setup_routes
+    register_setup_routes(app)
