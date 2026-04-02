@@ -95,7 +95,10 @@ def probe_port(port_path: str, baudrate: int = DEFAULT_BAUDRATE) -> list[int]:
     import scservo_sdk as scs
 
     handler = scs.PortHandler(port_path)
-    if not handler.openPort():
+    try:
+        if not handler.openPort():
+            return []
+    except OSError:
         return []
     handler.setBaudRate(baudrate)
     packet = scs.PacketHandler(0)
@@ -145,7 +148,10 @@ def probe_port_dynamixel(port_path: str, baudrate: int = DEFAULT_BAUDRATE) -> li
     import dynamixel_sdk as dxl
 
     handler = dxl.PortHandler(port_path)
-    if not handler.openPort():
+    try:
+        if not handler.openPort():
+            return []
+    except OSError:
         return []
     handler.setBaudRate(baudrate)
     packet = dxl.PacketHandler(2.0)
