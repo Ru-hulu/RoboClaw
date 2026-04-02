@@ -7,12 +7,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from roboclaw.embodied.hand_actions import (
-    _do_hand_close,
-    _do_hand_open,
-    _do_hand_pose,
-    _do_hand_status,
-)
 from roboclaw.embodied.ops.helpers import (
     _BIMANUAL_ID,
     _DEFAULT_REPLAY_ROOT,
@@ -27,7 +21,6 @@ from roboclaw.embodied.ops.helpers import (
     _run,
     _run_tty,
     _validate_dataset_name,
-    _validate_pairing,
 )
 from loguru import logger
 
@@ -159,43 +152,6 @@ async def _do_calibrate(setup: dict[str, Any], kwargs: dict[str, Any], tty_hando
         + "\n".join(results)
         + "\nNote: wrist_roll is auto-calibrated by LeRobot (expected)."
     )
-
-
-async def _do_teleoperate(
-    setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: Any,
-    service: Any = None,
-) -> str:
-    from roboclaw.embodied.adapters.cli import run_cli_session
-
-    if not tty_handoff:
-        return _NO_TTY_MSG
-    if service is None:
-        from roboclaw.embodied.service import EmbodiedService
-        service = EmbodiedService()
-    return await run_cli_session(service, "teleoperate", setup, kwargs, tty_handoff)
-
-
-async def _do_record(
-    setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: Any,
-    service: Any = None,
-) -> str:
-    if kwargs.get("checkpoint_path"):
-        return await _do_run_policy(setup, kwargs, tty_handoff)
-
-    from roboclaw.embodied.adapters.cli import run_cli_session
-
-    if not tty_handoff:
-        return _NO_TTY_MSG
-    # Early validation before handing off to terminal
-    dataset_name = kwargs.get("dataset_name")
-    if dataset_name:
-        error = _validate_dataset_name(dataset_name)
-        if error:
-            return error
-    if service is None:
-        from roboclaw.embodied.service import EmbodiedService
-        service = EmbodiedService()
-    return await run_cli_session(service, "record", setup, kwargs, tty_handoff)
 
 
 def _resolve_dataset_name(
@@ -386,19 +342,3 @@ async def _do_job_status(setup: dict[str, Any], kwargs: dict[str, Any], tty_hand
     job_id = kwargs.get("job_id", "")
     status = await LocalLeRobotRunner().job_status(job_id=job_id, log_dir=_logs_dir())
     return "\n".join(f"{key}: {value}" for key, value in status.items())
-
-
-ASYNC_DISPATCH: dict[str, Any] = {
-    "doctor": _do_doctor,
-    "identify": _do_identify,
-    "calibrate": _do_calibrate,
-    "teleoperate": _do_teleoperate,
-    "record": _do_record,
-    "replay": _do_replay,
-    "train": _do_train,
-    "job_status": _do_job_status,
-    "hand_open": _do_hand_open,
-    "hand_close": _do_hand_close,
-    "hand_pose": _do_hand_pose,
-    "hand_status": _do_hand_status,
-}
