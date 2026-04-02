@@ -3,18 +3,32 @@ import { useDashboard, type SessionState } from '../controllers/dashboard'
 import { useI18n } from '../controllers/i18n'
 import { postJson } from '../controllers/api'
 
-// ── Servo chart colors ────────────────────────────────────────
-const SERVO_COLORS = [
-  '#0969da', '#1a7f37', '#cf222e', '#9a6700', '#8250df', '#bc4c00',
-]
+// ── Servo chart ──────────────────────────────────────────────
 const MOTOR_NAMES = ['shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex', 'wrist_roll', 'gripper']
 const MAX_POINTS = 60
+
+// Each arm gets a base hue, motors within that arm get brightness variations
+const BASE_HUES = [210, 140, 0, 270, 30, 330] // blue, green, red, purple, orange, magenta
+
+function getArmPalette(armIndex: number): string[] {
+  const hue = BASE_HUES[armIndex % BASE_HUES.length]
+  return MOTOR_NAMES.map((_, i) => {
+    const lightness = 35 + i * 8 // 35% to 75%
+    return `hsl(${hue}, 70%, ${lightness}%)`
+  })
+}
 
 interface ServoHistory {
   [motor: string]: number[]
 }
 
-function ServoChart({ armAlias, history, busy }: { armAlias: string; history: ServoHistory; busy: boolean }) {
+function UnifiedServoChart({
+  histories,
+  armNames,
+}: {
+  histories: Record<string, ServoHistory>
+  armNames: string[]
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -22,53 +36,66 @@ function ServoChart({ armAlias, history, busy }: { armAlias: string; history: Se
     if (!canvas) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    const w = canvas.width
-    const h = canvas.height
+    const dpr = window.devicePixelRatio || 1
+    const w = canvas.clientWidth
+    const h = canvas.clientHeight
+    canvas.width = w * dpr
+    canvas.height = h * dpr
+    ctx.scale(dpr, dpr)
 
     ctx.clearRect(0, 0, w, h)
 
-    // Background grid
-    ctx.strokeStyle = '#d0d7de'
+    // Grid
+    ctx.strokeStyle = '#e1e4e8'
     ctx.lineWidth = 0.5
-    for (let y = 0; y < h; y += h / 4) {
+    for (let y = 0; y <= h; y += h / 4) {
       ctx.beginPath()
       ctx.moveTo(0, y)
       ctx.lineTo(w, y)
       ctx.stroke()
     }
 
-    // Draw each motor's line
-    MOTOR_NAMES.forEach((motor, idx) => {
-      const data = history[motor]
-      if (!data || data.length < 2) return
-      ctx.strokeStyle = SERVO_COLORS[idx]
-      ctx.lineWidth = 1.5
-      ctx.beginPath()
-      const step = w / (MAX_POINTS - 1)
-      const offset = MAX_POINTS - data.length
-      for (let i = 0; i < data.length; i++) {
-        const x = (offset + i) * step
-        const y = h - (data[i] / 4096) * h
-        if (i === 0) ctx.moveTo(x, y)
-        else ctx.lineTo(x, y)
-      }
-      ctx.stroke()
+    // Draw all arms
+    armNames.forEach((alias, armIdx) => {
+      const history = histories[alias]
+      if (!history) return
+      const palette = getArmPalette(armIdx)
+
+      MOTOR_NAMES.forEach((motor, motorIdx) => {
+        const data = history[motor]
+        if (!data || data.length < 2) return
+        ctx.strokeStyle = palette[motorIdx]
+        ctx.lineWidth = 0.8
+        ctx.beginPath()
+        const step = w / (MAX_POINTS - 1)
+        const offset = MAX_POINTS - data.length
+        for (let i = 0; i < data.length; i++) {
+          const x = (offset + i) * step
+          const y = h - (data[i] / 4096) * h
+          if (i === 0) ctx.moveTo(x, y)
+          else ctx.lineTo(x, y)
+        }
+        ctx.stroke()
+      })
     })
-  }, [history])
+  }, [histories, armNames])
 
   return (
     <div className="bg-sf border border-bd rounded-lg p-3">
-      <div className="flex items-center justify-between mb-2">
-        <h4 className="text-xs text-tx2 uppercase tracking-wider font-medium">{armAlias}</h4>
-        {busy && <span className="text-2xs text-yl">Serial busy</span>}
-      </div>
-      <canvas ref={canvasRef} width={400} height={120} className="w-full rounded bg-bg border border-bd" />
-      <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1.5">
-        {MOTOR_NAMES.map((name, idx) => (
-          <span key={name} className="text-2xs flex items-center gap-1">
-            <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: SERVO_COLORS[idx] }} />
-            {name}
-          </span>
+      <canvas
+        ref={canvasRef}
+        style={{ width: '100%', height: '200px' }}
+        className="rounded bg-bg border border-bd"
+      />
+      <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
+        {armNames.map((alias, armIdx) => (
+          <div key={alias} className="flex items-center gap-1.5">
+            <span
+              className="inline-block w-3 h-1 rounded-full"
+              style={{ backgroundColor: getArmPalette(armIdx)[0] }}
+            />
+            <span className="text-2xs text-tx2 font-medium">{alias}</span>
+          </div>
         ))}
       </div>
     </div>
@@ -156,14 +183,12 @@ function ServoChartPanel({ state, t }: { state: SessionState; t: (key: any) => s
     <div className="p-4 space-y-3">
       <h3 className="text-xs text-tx2 uppercase tracking-wider font-medium">{t('servoPositions')}</h3>
       {busy && (
-        <div className="text-sm text-yl flex items-center gap-2">
+        <div className="text-sm text-yl flex items-center gap-2 mb-2">
           <span className="w-2 h-2 rounded-full bg-yl animate-pulse" />
           {t('servoBusy')}
         </div>
       )}
-      {armNames.map((alias) => (
-        <ServoChart key={alias} armAlias={alias} history={histories[alias]} busy={busy} />
-      ))}
+      <UnifiedServoChart histories={histories} armNames={armNames} />
     </div>
   )
 }
