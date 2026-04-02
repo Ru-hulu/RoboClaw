@@ -6,9 +6,7 @@ ChannelManager) so the web UI has feature parity with ``roboclaw gateway``.
 
 from __future__ import annotations
 
-import asyncio
 import json
-from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -17,19 +15,10 @@ from fastapi import Body, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
-from roboclaw.agent.loop import AgentLoop
-from roboclaw.bus.queue import MessageBus
-from roboclaw.channels.manager import ChannelManager
 from roboclaw.channels.web import WebChannel
 from roboclaw.config.loader import get_config_path, load_config, load_runtime_config, save_config
-from roboclaw.config.paths import get_cron_dir
-from roboclaw.cron.service import CronService
-from roboclaw.cron.types import CronJob
-from roboclaw.heartbeat.service import HeartbeatService
-from roboclaw.providers.base import GenerationSettings
-from roboclaw.providers.factory import ProviderConfigurationError, UnconfiguredProvider, build_provider
+from roboclaw.providers.factory import build_provider
 from roboclaw.providers.registry import PROVIDERS
-from roboclaw.session.manager import SessionManager
 from roboclaw.utils.helpers import sync_workspace_templates
 
 
@@ -124,23 +113,12 @@ async def _discover_custom_model(api_base: str, api_key: str | None) -> str | No
     return None
 
 
-def _refresh_agent_defaults(agent: AgentLoop, config: Any) -> None:
-    agent.model = config.agents.defaults.model
-    agent.provider.generation = GenerationSettings(
-        temperature=config.agents.defaults.temperature,
-        max_tokens=config.agents.defaults.max_tokens,
-        reasoning_effort=config.agents.defaults.reasoning_effort,
-    )
-    agent.memory_consolidator.model = config.agents.defaults.model
-    agent.subagents.model = config.agents.defaults.model
-
-
 # ------------------------------------------------------------------
 # System routes
 # ------------------------------------------------------------------
 
 
-def _register_system_routes(app: FastAPI, agent: AgentLoop) -> None:
+def _register_system_routes(app: FastAPI, runtime: Any) -> None:
     @app.get("/api/system/provider-status")
     async def provider_status() -> dict[str, Any]:
         config = load_config(get_config_path())
@@ -159,10 +137,10 @@ def _register_system_routes(app: FastAPI, agent: AgentLoop) -> None:
 
     @app.post("/api/system/provider-config")
     async def save_provider_config(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-        return await _handle_save_provider(payload, agent)
+        return await _handle_save_provider(payload, runtime)
 
 
-async def _handle_save_provider(payload: dict[str, Any], agent: AgentLoop) -> dict[str, Any]:
+async def _handle_save_provider(payload: dict[str, Any], runtime: Any) -> dict[str, Any]:
     """Apply provider config changes, swap provider atomically, refresh agent."""
     config = load_config(get_config_path())
     section = config.providers.custom
@@ -191,8 +169,8 @@ async def _handle_save_provider(payload: dict[str, Any], agent: AgentLoop) -> di
 
     # Atomic provider swap
     new_provider = build_provider(config)
-    agent.provider = new_provider
-    _refresh_agent_defaults(agent, config)
+    runtime.agent.provider = new_provider
+    runtime._refresh_agent_defaults(config)
 
     return {"status": "ok", **_provider_status_payload(config)}
 
@@ -211,86 +189,6 @@ def _apply_extra_headers(payload: dict[str, Any], section: Any) -> dict[str, Any
 
 
 # ------------------------------------------------------------------
-# Cron callback (copied from gateway command pattern)
-# ------------------------------------------------------------------
-
-
-async def _on_cron_job(agent: AgentLoop, bus: MessageBus, provider: Any, job: CronJob) -> str | None:
-    from roboclaw.agent.tools.cron import CronTool
-    from roboclaw.agent.tools.message import MessageTool
-    from roboclaw.utils.evaluator import evaluate_response
-
-    reminder_note = (
-        "[Scheduled Task] Timer finished.\n\n"
-        f"Task '{job.name}' has been triggered.\n"
-        f"Scheduled instruction: {job.payload.message}"
-    )
-
-    cron_tool = agent.tools.get("cron")
-    cron_token = None
-    if isinstance(cron_tool, CronTool):
-        cron_token = cron_tool.set_cron_context(True)
-    try:
-        response = await agent.process_direct(
-            reminder_note,
-            session_key=f"cron:{job.id}",
-            channel=job.payload.channel or "cli",
-            chat_id=job.payload.to or "direct",
-        )
-    finally:
-        if isinstance(cron_tool, CronTool) and cron_token is not None:
-            cron_tool.reset_cron_context(cron_token)
-
-    message_tool = agent.tools.get("message")
-    if isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
-        return response
-
-    if not (job.payload.deliver and job.payload.to and response):
-        return response
-
-    should_notify = await evaluate_response(response, job.payload.message, provider, agent.model)
-    if should_notify:
-        from roboclaw.bus.events import OutboundMessage
-        await bus.publish_outbound(OutboundMessage(
-            channel=job.payload.channel or "cli",
-            chat_id=job.payload.to,
-            content=response,
-        ))
-    return response
-
-
-# ------------------------------------------------------------------
-# Heartbeat helpers
-# ------------------------------------------------------------------
-
-
-def _pick_heartbeat_target(channels: ChannelManager, session_manager: SessionManager) -> tuple[str, str]:
-    """Pick a routable channel/chat target for heartbeat-triggered messages."""
-    enabled = set(channels.enabled_channels)
-    for item in session_manager.list_sessions():
-        key = item.get("key") or ""
-        if ":" not in key:
-            continue
-        channel, chat_id = key.split(":", 1)
-        if channel in {"cli", "system"}:
-            continue
-        if channel in enabled and chat_id:
-            return channel, chat_id
-    return "cli", "direct"
-
-
-async def _cancel_background_tasks(app: FastAPI) -> None:
-    """Cancel all background tasks created during startup."""
-    for task_name in ("heartbeat_task", "cron_task", "channels_task", "agent_task"):
-        task = getattr(app.state, task_name, None)
-        if task is None:
-            continue
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
-
-
-# ------------------------------------------------------------------
 # App factory
 # ------------------------------------------------------------------
 
@@ -303,103 +201,18 @@ def create_app(
     port: int | None = None,
 ) -> FastAPI:
     """Build the FastAPI app with the full gateway runtime."""
+    from roboclaw.web.runtime import WebRuntime
 
-    # 1. Load config
     config = load_runtime_config(config_path, workspace)
     sync_workspace_templates(config.workspace_path)
 
-    # 2. Shared infra
-    bus = MessageBus()
-    sessions = SessionManager(config.workspace_path)
+    runtime = WebRuntime.build(config, host=host, port=port)
 
-    # 3. Provider (graceful fallback for unconfigured state)
-    try:
-        provider = build_provider(config)
-    except ProviderConfigurationError as exc:
-        logger.warning("Provider not configured at startup: {}. Configure via Settings.", exc)
-        provider = UnconfiguredProvider(str(exc))
-
-    # 4. Cron service
-    cron_store_path = get_cron_dir() / "jobs.json"
-    cron = CronService(cron_store_path)
-
-    # 5. Agent loop
-    agent = AgentLoop(
-        bus=bus,
-        provider=provider,
-        workspace=config.workspace_path,
-        model=config.agents.defaults.model,
-        max_iterations=config.agents.defaults.max_tool_iterations,
-        context_window_tokens=config.agents.defaults.context_window_tokens,
-        web_search_config=config.tools.web.search,
-        web_proxy=config.tools.web.proxy or None,
-        exec_config=config.tools.exec,
-        cron_service=cron,
-        restrict_to_workspace=config.tools.restrict_to_workspace,
-        session_manager=sessions,
-        mcp_servers=config.tools.mcp_servers,
-        channels_config=config.channels,
-    )
-    _refresh_agent_defaults(agent, config)
-
-    # Cron callback (needs agent + bus + provider)
-    cron.on_job = lambda job: _on_cron_job(agent, bus, provider, job)
-
-    # 6. Heartbeat service
-    hb_cfg = config.gateway.heartbeat
-
-    async def on_heartbeat_execute(tasks: str) -> str:
-        channel, chat_id = _pick_heartbeat_target(channel_manager, sessions)
-
-        async def _silent(*_args: Any, **_kwargs: Any) -> None:
-            pass
-
-        return await agent.process_direct(
-            tasks,
-            session_key="heartbeat",
-            channel=channel,
-            chat_id=chat_id,
-            on_progress=_silent,
-        )
-
-    async def on_heartbeat_notify(response: str) -> None:
-        from roboclaw.bus.events import OutboundMessage
-        channel, chat_id = _pick_heartbeat_target(channel_manager, sessions)
-        if channel == "cli":
-            return
-        await bus.publish_outbound(OutboundMessage(channel=channel, chat_id=chat_id, content=response))
-
-    heartbeat = HeartbeatService(
-        workspace=config.workspace_path,
-        provider=provider,
-        model=agent.model,
-        on_execute=on_heartbeat_execute,
-        on_notify=on_heartbeat_notify,
-        interval_s=hb_cfg.interval_s,
-        enabled=hb_cfg.enabled,
-    )
-
-    # 7. Force-enable web channel in config
-    web_defaults = WebChannel.default_config()
-    web_cfg = {**web_defaults, "enabled": True, "host": "0.0.0.0"}
-    if host is not None:
-        web_cfg["host"] = host
-    if port is not None:
-        web_cfg["port"] = port
-    config.channels.web = web_cfg
-
-    # 8. Channel manager (discovers and creates WebChannel via registry)
-    channel_manager = ChannelManager(config, bus)
-
-    # 9. Post-configure: inject session manager into WebChannel
-    web_ch = channel_manager.get_channel("web")
-    if web_ch is not None:
-        web_ch.sessions = sessions
-
-    # 10. Create FastAPI app (server owns it, not the channel)
     app = FastAPI(title="RoboClaw Web UI")
 
-    # 11. CORS middleware
+    # CORS middleware
+    web_cfg = config.channels.web
+    web_defaults = WebChannel.default_config()
     cors_origins = web_cfg.get("cors_origins", web_defaults.get("cors_origins", []))
     app.add_middleware(
         CORSMiddleware,
@@ -409,45 +222,18 @@ def create_app(
         allow_headers=["*"],
     )
 
-    # 12. Register routes
+    # Register routes
+    web_ch = runtime.channel_manager.get_channel("web")
     if web_ch is not None:
         web_ch.register_routes(app)
-    _register_system_routes(app, agent)
+    _register_system_routes(app, runtime)
 
-    # 12b. Dashboard routes + hardware monitor + EmbodiedService
+    # Dashboard routes
     if web_ch is not None:
-        from roboclaw.embodied.hardware_monitor import HardwareMonitor
-        from roboclaw.embodied.service import EmbodiedService
         from roboclaw.web.dashboard import register_dashboard_routes
 
-        async def _on_hw_fault(fault: Any) -> None:
-            await web_ch.broadcast({
-                "type": "dashboard.fault", **fault.to_dict(),
-            })
-
-        async def _on_hw_fault_resolved(fault: Any) -> None:
-            await web_ch.broadcast({
-                "type": "dashboard.fault.resolved",
-                "fault_type": fault.fault_type.value,
-                "device_alias": fault.device_alias,
-            })
-
-        hw_monitor = HardwareMonitor(
-            on_fault=_on_hw_fault,
-            on_fault_resolved=_on_hw_fault_resolved,
-        )
-        app.state.hardware_monitor = hw_monitor
-
-        async def _on_session_state_change(status: Any) -> None:
-            await web_ch.broadcast({
-                "type": "dashboard.session.state_changed", **status,
-            })
-
-        embodied_service = EmbodiedService(
-            hardware_monitor=hw_monitor,
-            on_state_change=_on_session_state_change,
-        )
-        app.state.embodied_service = embodied_service
+        app.state.hardware_monitor = runtime.hw_monitor
+        app.state.embodied_service = runtime.embodied_service
 
         # Wire the service into the agent's embodied tool groups
         from roboclaw.embodied.tool import EmbodiedToolGroup
@@ -460,20 +246,18 @@ def create_app(
         register_dashboard_routes(
             app,
             web_ch,
-            embodied_service,
+            runtime.embodied_service,
             get_config=lambda: (web_cfg["host"], web_cfg["port"]),
         )
 
-    # 13. Serve built frontend in production (ui/dist/)
+    # Serve built frontend in production (ui/dist/)
     ui_dist = Path(__file__).resolve().parent.parent.parent / "ui" / "dist"
     if ui_dist.is_dir():
         from starlette.staticfiles import StaticFiles
         from starlette.responses import FileResponse
 
-        # Static assets (js, css, images)
         app.mount("/assets", StaticFiles(directory=str(ui_dist / "assets")), name="ui-assets")
 
-        # SPA fallback: any non-API path returns index.html for client-side routing
         @app.get("/{full_path:path}")
         async def _spa_fallback(full_path: str):
             file_path = ui_dist / full_path
@@ -485,43 +269,13 @@ def create_app(
     app.state.web_host = web_cfg["host"]
     app.state.web_port = web_cfg["port"]
 
-    # 15. Startup: launch all background tasks
     @app.on_event("startup")
     async def _startup() -> None:
-        app.state.agent_task = asyncio.create_task(agent.run(), name="roboclaw-agent")
-        app.state.channels_task = asyncio.create_task(channel_manager.start_all(), name="roboclaw-channels")
-        app.state.cron_task = asyncio.create_task(cron.start(), name="roboclaw-cron")
-        app.state.heartbeat_task = asyncio.create_task(heartbeat.start(), name="roboclaw-heartbeat")
-        hw_mon = getattr(app.state, "hardware_monitor", None)
-        if hw_mon is not None:
-            app.state.hardware_monitor_task = asyncio.create_task(
-                hw_mon.run(), name="roboclaw-hw-monitor",
-            )
+        await runtime.start()
 
-    # 16. Shutdown: tear down gracefully
     @app.on_event("shutdown")
     async def _shutdown() -> None:
-        # Stop embodied service if active
-        svc = getattr(app.state, "embodied_service", None)
-        if svc is not None:
-            await svc.shutdown()
-
-        # Stop hardware monitor
-        hw_mon = getattr(app.state, "hardware_monitor", None)
-        if hw_mon is not None:
-            hw_mon.stop()
-        hw_task = getattr(app.state, "hardware_monitor_task", None)
-        if hw_task is not None:
-            hw_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await hw_task
-
-        agent.stop()
-        await channel_manager.stop_all()
-        heartbeat.stop()
-        cron.stop()
-        await _cancel_background_tasks(app)
-        await agent.close_mcp()
+        await runtime.shutdown()
 
     return app
 
