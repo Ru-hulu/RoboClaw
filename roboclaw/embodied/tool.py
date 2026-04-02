@@ -271,33 +271,107 @@ def create_embodied_tools(tty_handoff: Any = None) -> list[EmbodiedToolGroup]:
     ]
 
 
-_NO_SETUP_ACTIONS = frozenset({
-    "setup_show", "describe", "set_arm", "rename_arm",
-    "remove_arm", "set_camera", "preview_cameras", "remove_camera",
-    "set_hand", "remove_hand",
-    "list_datasets", "list_policies",
-})
+def _get_service(service: Any) -> Any:
+    """Return the provided service or create a default one."""
+    if service is not None:
+        return service
+    from roboclaw.embodied.service import EmbodiedService
+    return EmbodiedService()
 
 
 async def _dispatch(
-    action: str, kwargs: dict[str, Any], tty_handoff: Any, embodied_service: Any = None,
+    action: str, kwargs: dict[str, Any], tty_handoff: Any, service: Any = None,
 ) -> str | list:
-    from roboclaw.embodied.ops.configure import SYNC_DISPATCH
-    from roboclaw.embodied.ops.execute import ASYNC_DISPATCH
     from roboclaw.embodied.ops.helpers import ActionError
 
-    if action in _NO_SETUP_ACTIONS:
-        return SYNC_DISPATCH[action](kwargs)
+    svc = _get_service(service)
 
+    # Config operations — no setup needed
+    if action == "setup_show":
+        return svc.queries.get_setup()
+    if action == "describe":
+        return svc.queries.describe_actions(kwargs.get("target_action", ""))
+    if action == "set_arm":
+        return svc.config.set_arm(kwargs["alias"], kwargs["arm_type"], kwargs["port"])
+    if action == "rename_arm":
+        return svc.config.rename_arm(kwargs["alias"], kwargs["new_alias"])
+    if action == "remove_arm":
+        return svc.config.remove_arm(kwargs["alias"])
+    if action == "set_camera":
+        return svc.config.set_camera(kwargs.get("camera_name", ""), kwargs.get("camera_index", 0))
+    if action == "preview_cameras":
+        return svc.queries.preview_cameras()
+    if action == "remove_camera":
+        return svc.config.remove_camera(kwargs.get("camera_name", ""))
+    if action == "set_hand":
+        return svc.config.set_hand(kwargs["alias"], kwargs.get("hand_type", ""), kwargs.get("port", ""))
+    if action == "remove_hand":
+        return svc.config.remove_hand(kwargs["alias"])
+    if action == "list_datasets":
+        return svc.queries.list_datasets()
+    if action == "list_policies":
+        return svc.queries.list_policies()
+
+    # Operations requiring setup — ActionError is a user-facing error
+    # raised by helpers (e.g. missing arm), converted to a plain string.
+    return await _dispatch_with_setup(action, kwargs, tty_handoff, svc)
+
+
+async def _dispatch_with_setup(
+    action: str, kwargs: dict[str, Any], tty_handoff: Any, svc: Any,
+) -> str | list:
+    from roboclaw.embodied.ops.helpers import ActionError
     from roboclaw.embodied.setup import ensure_setup
 
     setup = ensure_setup()
 
-    handler = ASYNC_DISPATCH[action]
     try:
-        # Pass service through for actions that accept it (teleop/record)
-        if action in ("teleoperate", "record") and embodied_service is not None:
-            return await handler(setup, kwargs, tty_handoff, service=embodied_service)
-        return await handler(setup, kwargs, tty_handoff)
+        return await _run_action(action, kwargs, tty_handoff, svc, setup)
     except ActionError as exc:
         return str(exc)
+
+
+async def _run_action(
+    action: str, kwargs: dict[str, Any], tty_handoff: Any, svc: Any, setup: dict,
+) -> str | list:
+    if action == "doctor":
+        return await svc.run_doctor(setup, kwargs, tty_handoff)
+
+    # Record with checkpoint_path => run policy (no CLI session needed)
+    if action == "record" and kwargs.get("checkpoint_path"):
+        return await svc.run_policy(setup, kwargs, tty_handoff)
+
+    # Early dataset name validation for record
+    if action == "record":
+        dataset_name = kwargs.get("dataset_name")
+        if dataset_name:
+            from roboclaw.embodied.ops.helpers import _validate_dataset_name
+            error = _validate_dataset_name(dataset_name)
+            if error:
+                return error
+
+    if action in ("teleoperate", "record"):
+        from roboclaw.embodied.adapters.cli import run_cli_session
+        return await run_cli_session(svc, action, setup, kwargs, tty_handoff)
+
+    if action == "calibrate":
+        return await svc.run_calibrate(setup, kwargs, tty_handoff)
+    if action == "identify":
+        return await svc.run_identify(setup, kwargs, tty_handoff)
+    if action == "replay":
+        return await svc.run_replay(setup, kwargs, tty_handoff)
+    if action == "train":
+        return await svc.start_training(setup, kwargs, tty_handoff)
+    if action == "job_status":
+        return await svc.get_job_status(setup, kwargs, tty_handoff)
+
+    if action == "hand_open":
+        return await svc.hand_open(setup, kwargs, tty_handoff)
+    if action == "hand_close":
+        return await svc.hand_close(setup, kwargs, tty_handoff)
+    if action == "hand_pose":
+        return await svc.hand_pose(setup, kwargs, tty_handoff)
+    if action == "hand_status":
+        return await svc.hand_status(setup, kwargs, tty_handoff)
+
+    return f"Unknown action: {action}"
