@@ -33,6 +33,8 @@ def _make_app(session_busy: bool = False) -> FastAPI:
     app = FastAPI()
     svc = MagicMock()
     svc.busy = session_busy
+    if session_busy:
+        svc.acquire_hardware.side_effect = RuntimeError("Hardware busy: recording")
     app.state.embodied_service = svc
     register_setup_routes(app)
     return app

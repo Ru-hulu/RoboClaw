@@ -62,16 +62,30 @@ def register_setup_routes(app: FastAPI) -> None:
     wizard = SetupWizardState()
     app.state.setup_wizard = wizard
 
-    def _require_not_busy() -> None:
-        svc = getattr(app.state, "embodied_service", None)
-        if svc is not None and svc.busy:
-            raise HTTPException(409, "Session busy — stop teleop/recording first")
+    def _get_service():
+        return getattr(app.state, "embodied_service", None)
+
+    def _acquire_hardware(reason: str) -> None:
+        svc = _get_service()
+        if svc is not None:
+            try:
+                svc.acquire_hardware(reason)
+            except RuntimeError as exc:
+                raise HTTPException(409, str(exc)) from exc
+
+    def _release_hardware() -> None:
+        svc = _get_service()
+        if svc is not None:
+            svc.release_hardware()
 
     @app.post("/api/dashboard/setup/scan")
     async def setup_scan() -> dict[str, Any]:
-        _require_not_busy()
-        ports = await asyncio.to_thread(_scan_and_probe)
-        cameras = await asyncio.to_thread(scan_cameras)
+        _acquire_hardware("scanning")
+        try:
+            ports = await asyncio.to_thread(_scan_and_probe)
+            cameras = await asyncio.to_thread(scan_cameras)
+        finally:
+            _release_hardware()
         wizard.scanned_ports = ports
         wizard.scanned_cameras = cameras
         wizard.active = False
@@ -80,13 +94,16 @@ def register_setup_routes(app: FastAPI) -> None:
 
     @app.post("/api/dashboard/setup/camera-previews")
     async def setup_camera_previews() -> list[dict]:
-        _require_not_busy()
-        if not wizard.scanned_cameras:
-            raise HTTPException(400, "No cameras scanned. Run scan first.")
-        output_dir = Path("/tmp/roboclaw-camera-previews")
-        previews = await asyncio.to_thread(
-            capture_camera_frames, wizard.scanned_cameras, output_dir,
-        )
+        _acquire_hardware("camera-preview")
+        try:
+            if not wizard.scanned_cameras:
+                raise HTTPException(400, "No cameras scanned. Run scan first.")
+            output_dir = Path("/tmp/roboclaw-camera-previews")
+            previews = await asyncio.to_thread(
+                capture_camera_frames, wizard.scanned_cameras, output_dir,
+            )
+        finally:
+            _release_hardware()
         return previews
 
     @app.get("/api/dashboard/setup/camera-preview/{index}")
@@ -100,12 +117,16 @@ def register_setup_routes(app: FastAPI) -> None:
 
     @app.post("/api/dashboard/setup/motion/start")
     async def motion_start() -> dict[str, Any]:
-        _require_not_busy()
-        if not wizard.scanned_ports:
-            raise HTTPException(400, "No scanned ports. Run scan first.")
-        baselines = await asyncio.to_thread(
-            _read_all_baselines, wizard.scanned_ports,
-        )
+        _acquire_hardware("motion-detection")
+        try:
+            if not wizard.scanned_ports:
+                raise HTTPException(400, "No scanned ports. Run scan first.")
+            baselines = await asyncio.to_thread(
+                _read_all_baselines, wizard.scanned_ports,
+            )
+        except Exception:
+            _release_hardware()
+            raise
         wizard.baselines = baselines
         wizard.active = True
         return {"status": "watching", "port_count": len(baselines)}
@@ -114,7 +135,6 @@ def register_setup_routes(app: FastAPI) -> None:
     async def motion_poll() -> dict[str, Any]:
         if not wizard.active or not wizard.baselines:
             raise HTTPException(400, "Motion detection not started")
-        _require_not_busy()
         results = await asyncio.to_thread(
             _poll_motion, wizard.scanned_ports, wizard.baselines,
         )
@@ -124,6 +144,7 @@ def register_setup_routes(app: FastAPI) -> None:
     async def motion_stop() -> dict[str, str]:
         wizard.active = False
         wizard.baselines = {}
+        _release_hardware()
         return {"status": "stopped"}
 
     @app.post("/api/dashboard/setup/arm")

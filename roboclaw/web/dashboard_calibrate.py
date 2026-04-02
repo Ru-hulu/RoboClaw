@@ -28,6 +28,7 @@ class _CalibrationState:
         self.session: CalibrationSession | None = None
         self.arm_alias: str = ""
         self._lock_handle: Any = None
+        self._port_cm: Any = None
 
     @property
     def active(self) -> bool:
@@ -47,26 +48,32 @@ def register_calibrate_routes(app: FastAPI) -> None:
         if _state.active:
             raise HTTPException(409, "Calibration already in progress.")
 
-        # Check session not busy
         svc = getattr(app.state, "embodied_service", None)
-        if svc and svc.busy:
-            raise HTTPException(409, "Cannot calibrate while teleop/recording is active.")
+        if svc:
+            try:
+                svc.acquire_hardware("calibrating")
+            except RuntimeError as exc:
+                raise HTTPException(409, str(exc)) from exc
 
         setup = load_setup()
         arm = _find_arm(setup, body.arm_alias)
 
-        # Acquire port lock
+        # Acquire port lock — store the CM so we can __aexit__ the same one
         port = arm.get("port", "")
         if port:
-            _state._lock_handle = await port_locks.acquire(port).__aenter__()
+            _state._port_cm = port_locks.acquire(port)
+            _state._lock_handle = await _state._port_cm.__aenter__()
 
         session = CalibrationSession(arm)
         try:
             await asyncio.to_thread(session.connect)
         except Exception:
-            if _state._lock_handle:
-                await port_locks.acquire(port).__aexit__(None, None, None)
+            if _state._port_cm:
+                await _state._port_cm.__aexit__(None, None, None)
                 _state._lock_handle = None
+                _state._port_cm = None
+            if svc:
+                svc.release_hardware()
             raise
 
         _state.session = session
@@ -103,6 +110,9 @@ def register_calibrate_routes(app: FastAPI) -> None:
         calibration = await asyncio.to_thread(_state.session.finish)
         mark_arm_calibrated(_state.arm_alias)
         await _cleanup()
+        svc = getattr(app.state, "embodied_service", None)
+        if svc:
+            svc.release_hardware()
         return {"state": "done", "calibration": calibration}
 
     @app.post(f"{API}/cancel")
@@ -110,6 +120,9 @@ def register_calibrate_routes(app: FastAPI) -> None:
         if _state.active:
             await asyncio.to_thread(_state.session.cancel)
             await _cleanup()
+        svc = getattr(app.state, "embodied_service", None)
+        if svc:
+            svc.release_hardware()
         return {"state": "idle"}
 
 
@@ -128,11 +141,10 @@ def _require_session() -> None:
 
 async def _cleanup() -> None:
     """Release port lock and clear session."""
-    if _state._lock_handle and _state.session:
-        port = _state.session._arm.get("port", "")
-        if port:
-            await port_locks.acquire(port).__aexit__(None, None, None)
+    if _state._port_cm:
+        await _state._port_cm.__aexit__(None, None, None)
     _state._lock_handle = None
+    _state._port_cm = None
     if _state.session:
         await asyncio.to_thread(_state.session.disconnect)
     _state.session = None

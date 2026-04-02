@@ -66,12 +66,27 @@ class EmbodiedService:
         self._session = OperationSession(on_state_change=self._on_session_state_change)
         self._external_callback = on_state_change
         self._recording_started = False
+        self._hw_lock_holder: str = ""
 
     # -- Properties -----------------------------------------------------------
 
     @property
     def busy(self) -> bool:
-        return self._session.busy
+        return self._session.busy or self._hw_lock_holder != ""
+
+    @property
+    def busy_reason(self) -> str:
+        if self._session.busy:
+            return self._session.state
+        return self._hw_lock_holder
+
+    def acquire_hardware(self, reason: str) -> None:
+        if self.busy:
+            raise RuntimeError(f"Hardware busy: {self.busy_reason}")
+        self._hw_lock_holder = reason
+
+    def release_hardware(self) -> None:
+        self._hw_lock_holder = ""
 
     def get_status(self) -> dict[str, Any]:
         return self._session.get_status()
