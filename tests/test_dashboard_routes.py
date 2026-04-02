@@ -8,8 +8,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from roboclaw.embodied.service import EmbodiedService
 from roboclaw.web.dashboard import register_dashboard_routes
-from roboclaw.web.dashboard_session import DashboardSession
 
 
 @pytest.fixture()
@@ -17,19 +17,21 @@ def app():
     """Minimal FastAPI app with dashboard routes registered."""
     app = FastAPI()
 
-    async def _noop_broadcast(event):
-        pass
-
     class FakeChannel:
         async def broadcast(self, event):
             pass
 
     from roboclaw.embodied.hardware_monitor import HardwareMonitor
-    app.state.hardware_monitor = HardwareMonitor(
+    hw_monitor = HardwareMonitor(
         on_fault=lambda f: None,
         on_fault_resolved=lambda f: None,
     )
-    register_dashboard_routes(app, FakeChannel(), get_config=lambda: ("0.0.0.0", 8080))
+    app.state.hardware_monitor = hw_monitor
+
+    service = EmbodiedService(hardware_monitor=hw_monitor)
+    app.state.embodied_service = service
+
+    register_dashboard_routes(app, FakeChannel(), service, get_config=lambda: ("0.0.0.0", 8080))
     return app
 
 
@@ -87,7 +89,7 @@ class TestSessionLifecycle:
 class TestHardwareStatus:
     def test_hardware_status(self, client, monkeypatch):
         monkeypatch.setattr(
-            "roboclaw.web.dashboard.load_setup",
+            "roboclaw.embodied.service.load_setup",
             lambda: {"arms": [], "cameras": []},
         )
         resp = client.get("/api/dashboard/hardware-status")
@@ -146,11 +148,11 @@ class TestServoPositions:
         assert data["error"] is None
 
     def test_servo_when_busy(self, client, app):
-        app.state.dashboard_session._state = "recording"
+        app.state.embodied_service._session._state = "recording"
         resp = client.get("/api/dashboard/servo-positions")
         assert resp.status_code == 200
         assert resp.json()["error"] == "busy"
-        app.state.dashboard_session._state = "idle"
+        app.state.embodied_service._session._state = "idle"
 
 
 # ---------------------------------------------------------------------------

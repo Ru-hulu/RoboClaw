@@ -14,10 +14,9 @@ from fastapi import FastAPI, HTTPException
 from loguru import logger
 from pydantic import BaseModel
 
-from roboclaw.embodied.hardware_monitor import ArmStatus, CameraStatus, HardwareMonitor, check_arm_status, check_camera_status
+from roboclaw.embodied.service import EmbodiedService
 from roboclaw.embodied.setup import load_setup
 from roboclaw.web.dashboard_datasets import delete_dataset, get_dataset_info, list_datasets
-from roboclaw.web.dashboard_session import DashboardSession
 from roboclaw.web.troubleshooting import generate_fault_snapshot, get_troubleshoot_map_json
 
 
@@ -56,33 +55,6 @@ def _get_lan_ip() -> str:
         return "127.0.0.1"
 
 
-def _compute_readiness(
-    arms: list[dict[str, Any]],
-    arm_statuses: list[ArmStatus],
-    camera_statuses: list[CameraStatus],
-) -> tuple[bool, list[str]]:
-    from roboclaw.embodied.ops.helpers import group_arms
-
-    missing: list[str] = []
-    grouped = group_arms(arms)
-    if not grouped["followers"]:
-        missing.append("No follower arm configured")
-    if not grouped["leaders"]:
-        missing.append("No leader arm configured")
-    for s in arm_statuses:
-        if not s.connected:
-            missing.append(f"Arm '{s.alias}' is disconnected")
-        elif not s.calibrated:
-            missing.append(f"Arm '{s.alias}' is not calibrated")
-    for s in camera_statuses:
-        if not s.connected:
-            missing.append(f"Camera '{s.alias}' is disconnected")
-    f, l = grouped["followers"], grouped["leaders"]
-    if f and l and len(f) != len(l):
-        missing.append(f"Follower/leader count mismatch: {len(f)} vs {len(l)}")
-    return len(missing) == 0, missing
-
-
 def _datasets_root() -> Path:
     from roboclaw.embodied.ops.helpers import dataset_root
     return dataset_root(load_setup())
@@ -95,86 +67,65 @@ def _datasets_root() -> Path:
 def register_dashboard_routes(
     app: FastAPI,
     web_channel: Any,
+    service: EmbodiedService,
     get_config: Callable[[], tuple[str, int]],
 ) -> None:
     """Register all dashboard API endpoints on the FastAPI app."""
-
-    async def _on_state_change(status: dict[str, Any]) -> None:
-        await web_channel.broadcast({
-            "type": "dashboard.session.state_changed", **status,
-        })
-
-    session = DashboardSession(on_state_change=_on_state_change)
-    app.state.dashboard_session = session
 
     # -- Hardware status ---------------------------------------------------
 
     @app.get("/api/dashboard/hardware-status")
     async def hardware_status() -> dict[str, Any]:
-        setup = load_setup()
-        arms = setup.get("arms", [])
-        cameras = setup.get("cameras", [])
-        arm_statuses = [check_arm_status(a) for a in arms]
-        camera_statuses = [check_camera_status(c) for c in cameras]
-        ready, missing = _compute_readiness(arms, arm_statuses, camera_statuses)
-        return {
-            "ready": ready, "missing": missing,
-            "arms": [s.to_dict() for s in arm_statuses],
-            "cameras": [s.to_dict() for s in camera_statuses],
-            "session_busy": session.busy,
-        }
+        return service.get_hardware_status()
 
     # -- Session lifecycle -------------------------------------------------
 
     @app.get("/api/dashboard/session/status")
     async def session_status() -> dict[str, Any]:
-        return session.get_status()
+        return service.get_status()
 
     @app.post("/api/dashboard/session/teleop/start")
     async def teleop_start(body: TeleopStartRequest | None = None) -> dict[str, str]:
-        await session.start_teleop()
+        fps = body.fps if body else 30
+        await service.start_teleop(fps=fps)
         return {"status": "teleoperating"}
 
     @app.post("/api/dashboard/session/teleop/stop")
     async def teleop_stop() -> dict[str, str]:
-        await session.stop()
+        await service.stop()
         return {"status": "idle"}
 
     @app.post("/api/dashboard/session/record/start")
     async def record_start(body: RecordStartRequest) -> dict[str, Any]:
-        dataset_name = await session.start_recording(
+        dataset_name = await service.start_recording(
             task=body.task,
             num_episodes=body.num_episodes,
             fps=body.fps,
             episode_time_s=body.episode_time_s,
             reset_time_s=body.reset_time_s,
         )
-        app.state.hardware_monitor.set_recording_active(True)
         return {"status": "recording", "dataset_name": dataset_name}
 
     @app.post("/api/dashboard/session/record/stop")
     async def record_stop() -> dict[str, str]:
-        try:
-            await session.stop()
-        finally:
-            app.state.hardware_monitor.set_recording_active(False)
+        await service.stop()
         return {"status": "idle"}
 
     # -- Episode control ---------------------------------------------------
 
     @app.post("/api/dashboard/session/episode/save")
     async def episode_save() -> dict[str, str]:
-        await session.save_episode()
+        await service.save_episode()
         return {"status": "episode_saved"}
 
     @app.post("/api/dashboard/session/episode/discard")
     async def episode_discard() -> dict[str, str]:
-        await session.discard_episode()
+        await service.discard_episode()
         return {"status": "episode_discarded"}
 
     @app.post("/api/dashboard/session/episode/skip-reset")
     async def episode_skip_reset() -> dict[str, str]:
-        await session.skip_reset()
+        await service.skip_reset()
         return {"status": "reset_skipped"}
 
     # -- Datasets ----------------------------------------------------------
@@ -199,7 +150,7 @@ def register_dashboard_routes(
 
     @app.get("/api/dashboard/servo-positions")
     async def servo_positions() -> dict[str, Any]:
-        if session.busy:
+        if service.busy:
             return {"error": "busy", "arms": {}}
         from roboclaw.embodied.motors import read_servo_positions
         return await asyncio.to_thread(read_servo_positions)
@@ -212,6 +163,7 @@ def register_dashboard_routes(
 
     @app.post("/api/dashboard/troubleshoot/recheck")
     async def troubleshoot_recheck(body: RecheckRequest) -> dict[str, Any]:
+        from roboclaw.embodied.hardware_monitor import HardwareMonitor
         monitor: HardwareMonitor = app.state.hardware_monitor
         faults = monitor.check_hardware()
         return {"faults": [f.to_dict() for f in faults]}
@@ -219,6 +171,7 @@ def register_dashboard_routes(
     @app.post("/api/dashboard/troubleshoot/snapshot")
     async def troubleshoot_snapshot() -> dict[str, Any]:
         setup = load_setup()
+        from roboclaw.embodied.hardware_monitor import HardwareMonitor
         monitor: HardwareMonitor = app.state.hardware_monitor
         faults = monitor.active_faults
         return generate_fault_snapshot(setup, faults, "")

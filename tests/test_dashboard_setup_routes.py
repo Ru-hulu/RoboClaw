@@ -31,9 +31,9 @@ _MOCK_CAMERAS = [
 def _make_app(session_busy: bool = False) -> FastAPI:
     """Create a minimal FastAPI app with setup routes registered."""
     app = FastAPI()
-    session = MagicMock()
-    session.busy = session_busy
-    app.state.dashboard_session = session
+    svc = MagicMock()
+    svc.busy = session_busy
+    app.state.embodied_service = svc
     register_setup_routes(app)
     return app
 

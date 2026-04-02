@@ -414,9 +414,10 @@ def create_app(
         web_ch.register_routes(app)
     _register_system_routes(app, agent)
 
-    # 12b. Dashboard routes + hardware monitor
+    # 12b. Dashboard routes + hardware monitor + EmbodiedService
     if web_ch is not None:
         from roboclaw.embodied.hardware_monitor import HardwareMonitor
+        from roboclaw.embodied.service import EmbodiedService
         from roboclaw.web.dashboard import register_dashboard_routes
 
         async def _on_hw_fault(fault: Any) -> None:
@@ -437,9 +438,21 @@ def create_app(
         )
         app.state.hardware_monitor = hw_monitor
 
+        async def _on_session_state_change(status: Any) -> None:
+            await web_ch.broadcast({
+                "type": "dashboard.session.state_changed", **status,
+            })
+
+        embodied_service = EmbodiedService(
+            hardware_monitor=hw_monitor,
+            on_state_change=_on_session_state_change,
+        )
+        app.state.embodied_service = embodied_service
+
         register_dashboard_routes(
             app,
             web_ch,
+            embodied_service,
             get_config=lambda: (web_cfg["host"], web_cfg["port"]),
         )
 
@@ -480,10 +493,10 @@ def create_app(
     # 16. Shutdown: tear down gracefully
     @app.on_event("shutdown")
     async def _shutdown() -> None:
-        # Stop dashboard session if active
-        dashboard_session = getattr(app.state, "dashboard_session", None)
-        if dashboard_session is not None and dashboard_session.busy:
-            await dashboard_session.stop()
+        # Stop embodied service if active
+        svc = getattr(app.state, "embodied_service", None)
+        if svc is not None:
+            await svc.shutdown()
 
         # Stop hardware monitor
         hw_mon = getattr(app.state, "hardware_monitor", None)

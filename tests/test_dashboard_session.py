@@ -1,10 +1,10 @@
-"""Tests for DashboardSession state machine and stdout parsing."""
+"""Tests for OperationSession state machine and stdout parsing."""
 
 from __future__ import annotations
 
 import pytest
 
-from roboclaw.web.dashboard_session import DashboardSession
+from roboclaw.embodied.operation_session import OperationSession
 
 
 # ---------------------------------------------------------------------------
@@ -13,33 +13,33 @@ from roboclaw.web.dashboard_session import DashboardSession
 
 class TestStateMachine:
     def test_initial_state_is_idle(self):
-        session = DashboardSession()
+        session = OperationSession()
         assert session.state == "idle"
         assert not session.busy
 
     def test_busy_when_not_idle(self):
-        session = DashboardSession()
+        session = OperationSession()
         session._state = "preparing"
         assert session.busy
 
     def test_busy_when_teleoperating(self):
-        session = DashboardSession()
+        session = OperationSession()
         session._state = "teleoperating"
         assert session.busy
 
     def test_busy_when_recording(self):
-        session = DashboardSession()
+        session = OperationSession()
         session._state = "recording"
         assert session.busy
 
     def test_require_idle_raises_when_busy(self):
-        session = DashboardSession()
+        session = OperationSession()
         session._state = "recording"
         with pytest.raises(RuntimeError, match="Session busy"):
             session._require_idle_or_raise()
 
     def test_require_idle_passes_when_idle(self):
-        session = DashboardSession()
+        session = OperationSession()
         session._require_idle_or_raise()  # should not raise
 
 
@@ -49,13 +49,13 @@ class TestStateMachine:
 
 class TestGetStatus:
     def test_idle_status(self):
-        session = DashboardSession()
+        session = OperationSession()
         status = session.get_status()
         assert status["state"] == "idle"
         assert status["dataset"] is None
 
     def test_recording_status(self):
-        session = DashboardSession()
+        session = OperationSession()
         session._state = "recording"
         session._dataset_name = "test_ds"
         session._saved_episodes = 3
@@ -69,7 +69,7 @@ class TestGetStatus:
         assert status["target_episodes"] == 10
 
     def test_non_recording_hides_dataset(self):
-        session = DashboardSession()
+        session = OperationSession()
         session._state = "teleoperating"
         session._dataset_name = "leftover"
         assert session.get_status()["dataset"] is None
@@ -80,8 +80,8 @@ class TestGetStatus:
 # ---------------------------------------------------------------------------
 
 class TestParseLine:
-    def _session(self) -> DashboardSession:
-        s = DashboardSession()
+    def _session(self) -> OperationSession:
+        s = OperationSession()
         s._state = "recording"
         return s
 
@@ -202,6 +202,6 @@ class TestParseLine:
 class TestSendKey:
     @pytest.mark.asyncio
     async def test_send_key_no_process_raises(self):
-        session = DashboardSession()
+        session = OperationSession()
         with pytest.raises(RuntimeError, match="No subprocess stdin"):
             await session.save_episode()

@@ -48,8 +48,8 @@ def register_calibrate_routes(app: FastAPI) -> None:
             raise HTTPException(409, "Calibration already in progress.")
 
         # Check session not busy
-        dashboard_session = getattr(app.state, "dashboard_session", None)
-        if dashboard_session and dashboard_session.busy:
+        svc = getattr(app.state, "embodied_service", None)
+        if svc and svc.busy:
             raise HTTPException(409, "Cannot calibrate while teleop/recording is active.")
 
         setup = load_setup()

@@ -1,10 +1,13 @@
-"""Async session manager for the data collection dashboard.
+"""Subprocess lifecycle for teleop/record operations.
 
 Manages one LeRobot subprocess at a time (teleop or recording) with:
 - State machine: idle → preparing → teleoperating/recording → idle
 - stdin control for episode save/discard/skip-reset/ESC
 - stdout parsing for episode lifecycle tracking
 - Callback-driven progress notifications
+
+Extracted from web/dashboard_session.py so both Web and CLI can share
+the same subprocess orchestration via EmbodiedService.
 """
 
 from __future__ import annotations
@@ -42,7 +45,7 @@ _RERUN_BIND = "0.0.0.0"
 StatusCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
 
 
-class DashboardSession:
+class OperationSession:
     """Manages one LeRobot subprocess (teleop or recording) at a time."""
 
     def __init__(self, on_state_change: StatusCallback | None = None) -> None:
@@ -96,14 +99,16 @@ class DashboardSession:
 
     # -- Lifecycle ---------------------------------------------------------
 
-    async def start_teleop(self) -> None:
+    async def start_teleop(self, *, fps: int = 30) -> None:
         self._require_idle_or_raise()
         self._error_message = ""
         self._stderr_lines = []
         setup = load_setup()
         await self._start_rerun_server()
         try:
-            argv = prepare_teleop(setup, **self._rerun_display_kwargs())
+            argv = prepare_teleop(
+                setup, {"fps": fps}, **self._rerun_display_kwargs(),
+            )
         except ActionError as exc:
             await self._stop_rerun_server()
             raise RuntimeError(str(exc)) from exc
