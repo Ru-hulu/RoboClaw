@@ -82,7 +82,7 @@ def app_and_service(service):
     from roboclaw.embodied.hardware_monitor import HardwareMonitor
 
     app = FastAPI()
-    hw = HardwareMonitor(on_fault=lambda f: None, on_fault_resolved=lambda f: None)
+    hw = HardwareMonitor()
     app.state.hardware_monitor = hw
     app.state.embodied_service = service
 
