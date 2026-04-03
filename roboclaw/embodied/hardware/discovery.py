@@ -1,4 +1,4 @@
-"""Hardware discovery orchestrator — replaces engine/scanner.py."""
+"""Hardware discovery orchestrator."""
 from __future__ import annotations
 
 from roboclaw.embodied.hardware.motion import (
@@ -46,32 +46,26 @@ class HardwareDiscovery:
         family = get_family_by_name(model)
         prober = get_prober(family.probe_protocol)
         ports = scan_serial_ports()
-        result = self._probe_ports(ports, prober)
+        result = self._probe_ports(ports, prober, family.probe_protocol)
         self._scanned_ports = result
         return result
 
     def discover_all(self) -> list[dict]:
         """Probe all ports with all registered probers (per-port, per-prober).
 
-        Fixes the mixed-protocol bug: each port is tried with each prober
-        independently rather than trying all ports with one protocol first.
+        Each port is tried with each prober independently, fixing the
+        mixed-protocol bug where Koch arms were lost if SO101 was found first.
         """
         ports = scan_serial_ports()
         result = []
-        saved = suppress_stderr()
-        try:
-            for port in ports:
-                for protocol, prober_cls in _REGISTRY.items():
-                    prober = prober_cls()
-                    path = resolve_port_path(port)
-                    if not path:
-                        continue
-                    ids = prober.probe(path)
-                    if ids:
-                        result.append({**port, "motor_ids": ids, "bus_type": protocol})
-                        break  # first match wins for this port
-        finally:
-            restore_stderr(saved)
+        for protocol, prober_cls in _REGISTRY.items():
+            prober = prober_cls()
+            matched = self._probe_ports(ports, prober, protocol)
+            matched_devs = {p.get("dev") for p in matched}
+            result.extend(matched)
+            ports = [p for p in ports if p.get("dev") not in matched_devs]
+            if not ports:
+                break
         self._scanned_ports = result
         return result
 
@@ -92,9 +86,13 @@ class HardwareDiscovery:
         if not self._scanned_ports:
             raise RuntimeError("No scanned ports. Run discover first.")
         self._baselines = {}
-        for port in self._scanned_ports:
-            path = resolve_port_path(port)
-            self._baselines[path] = read_positions_for_port(port)
+        saved = suppress_stderr()
+        try:
+            for port in self._scanned_ports:
+                path = resolve_port_path(port)
+                self._baselines[path] = read_positions_for_port(port)
+        finally:
+            restore_stderr(saved)
         self._motion_active = True
         return len(self._baselines)
 
@@ -103,19 +101,23 @@ class HardwareDiscovery:
         if not self._motion_active:
             raise RuntimeError("Motion detection not started.")
         results = []
-        for port in self._scanned_ports:
-            path = resolve_port_path(port)
-            current = read_positions_for_port(port)
-            baseline = self._baselines.get(path, {})
-            delta = detect_motion(baseline, current)
-            results.append({
-                "port_id": resolve_port_by_id(port),
-                "dev": port.get("dev", ""),
-                "by_id": port.get("by_id", ""),
-                "motor_ids": port.get("motor_ids", []),
-                "delta": delta,
-                "moved": delta > MOTION_THRESHOLD,
-            })
+        saved = suppress_stderr()
+        try:
+            for port in self._scanned_ports:
+                path = resolve_port_path(port)
+                current = read_positions_for_port(port)
+                baseline = self._baselines.get(path, {})
+                delta = detect_motion(baseline, current)
+                results.append({
+                    "port_id": resolve_port_by_id(port),
+                    "dev": port.get("dev", ""),
+                    "by_id": port.get("by_id", ""),
+                    "motor_ids": port.get("motor_ids", []),
+                    "delta": delta,
+                    "moved": delta > MOTION_THRESHOLD,
+                })
+        finally:
+            restore_stderr(saved)
         return results
 
     def stop_motion_detection(self) -> None:
@@ -123,19 +125,19 @@ class HardwareDiscovery:
         self._motion_active = False
         self._baselines = {}
 
-    def _probe_ports(self, ports: list[dict], prober) -> list[dict]:
+    def _probe_ports(self, ports: list[dict], prober, protocol: str = "") -> list[dict]:
         """Probe ports with a single prober, handling permission errors."""
         from roboclaw.embodied.hardware.scan import fix_serial_permissions
 
         saved = suppress_stderr()
         try:
             try:
-                return self._do_probe(ports, prober)
+                return self._do_probe(ports, prober, protocol)
             except Exception as exc:
                 if "Permission denied" not in str(exc) and "Errno 13" not in str(exc):
                     raise
                 if fix_serial_permissions():
-                    return self._do_probe(ports, prober)
+                    return self._do_probe(ports, prober, protocol)
                 raise PermissionError(
                     "Serial port permission denied. Run: bash scripts/setup-udev.sh"
                 ) from exc
@@ -143,7 +145,7 @@ class HardwareDiscovery:
             restore_stderr(saved)
 
     @staticmethod
-    def _do_probe(ports: list[dict], prober) -> list[dict]:
+    def _do_probe(ports: list[dict], prober, protocol: str = "") -> list[dict]:
         """Run the prober on each port, return those with motors."""
         result = []
         for port in ports:
@@ -152,12 +154,5 @@ class HardwareDiscovery:
                 continue
             ids = prober.probe(path)
             if ids:
-                bus_type = "feetech"
-                # Infer bus_type from prober class name
-                cls_name = type(prober).__name__.lower()
-                if "dynamixel" in cls_name:
-                    bus_type = "dynamixel"
-                elif "feetech" in cls_name:
-                    bus_type = "feetech"
-                result.append({**port, "motor_ids": ids, "bus_type": bus_type})
+                result.append({**port, "motor_ids": ids, "bus_type": protocol})
         return result

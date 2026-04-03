@@ -150,7 +150,6 @@ def main() -> None:
 
     print("Probing ports for motors...")
     discovery = HardwareDiscovery()
-    discovery._scanned_ports = scanned_ports
     ports = discovery.discover_all()
     if not ports:
         print("No motors found on any port.")

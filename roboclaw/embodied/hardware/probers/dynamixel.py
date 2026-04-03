@@ -8,7 +8,6 @@ MOTOR_IDS = list(range(1, 7))
 
 # Dynamixel Present_Position register
 _DYNAMIXEL_POS_ADDR = 132
-_DYNAMIXEL_POS_LEN = 4
 
 
 class DynamixelProber:

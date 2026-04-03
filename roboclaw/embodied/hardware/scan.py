@@ -283,7 +283,7 @@ def _capture_camera_frame(
 
 
 # ---------------------------------------------------------------------------
-# Serial permission helpers (moved from engine/scanner.py)
+# Serial permission helpers
 # ---------------------------------------------------------------------------
 
 

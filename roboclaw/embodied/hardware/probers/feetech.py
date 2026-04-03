@@ -8,7 +8,6 @@ MOTOR_IDS = list(range(1, 7))
 
 # STS3215 Present_Position register
 _FEETECH_POS_ADDR = 56
-_FEETECH_POS_LEN = 2
 
 
 class FeetechProber:
