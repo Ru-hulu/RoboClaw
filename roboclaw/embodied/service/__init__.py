@@ -18,6 +18,10 @@ from roboclaw.embodied.service.scanning import ScanningService
 from roboclaw.embodied.service.session import SessionService
 
 
+class EmbodimentBusyError(RuntimeError):
+    """Raised when the embodiment lock cannot be acquired."""
+
+
 class EmbodiedService:
     """Single point of control for ALL embodied operations.
 
@@ -65,7 +69,7 @@ class EmbodiedService:
 
     def acquire_embodiment(self, owner: str) -> None:
         if self.busy:
-            raise RuntimeError(f"Embodiment busy: {self.busy_reason}")
+            raise EmbodimentBusyError(f"Embodiment busy: {self.busy_reason}")
         self._embodiment_owner = owner
 
     def release_embodiment(self) -> None:
@@ -127,25 +131,8 @@ class EmbodiedService:
     async def cancel_calibration(self) -> None:
         await self.calibration.cancel()
 
-    # -- Delegated: scanning --------------------------------------------------
-
-    def scan_ports(self) -> list[dict]:
-        return self.scanning.scan_ports()
-
-    def scan_cameras(self) -> list[dict]:
-        return self.scanning.scan_cameras()
-
-    def capture_camera_previews(self, output_dir: str) -> list[dict]:
-        return self.scanning.capture_camera_previews(output_dir)
-
-    def start_motion_detection(self) -> int:
-        return self.scanning.start_motion_detection()
-
-    def poll_motion(self) -> list[dict]:
-        return self.scanning.poll_motion()
-
-    def stop_motion_detection(self) -> None:
-        self.scanning.stop_motion_detection()
+    # -- Scanning is accessed via service.scanning directly --------------------
+    # No top-level delegation needed — callers use service.scanning.*
 
     # -- Delegated: queries (backward-compat wrappers) -------------------------
 

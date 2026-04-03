@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from roboclaw.embodied.service import EmbodiedService
 
 _ACTION_DESCRIPTIONS = {
+    "scan": "Scan for serial ports with motors and available cameras.",
     "doctor": "Check LeRobot availability and show the current embodied setup.",
     "identify": "Launch the interactive arm-identification flow for detected serial ports.",
     "describe": "Explain adjustable parameters for a target embodied action.",
@@ -117,11 +118,24 @@ class QueryService:
         self._parent = parent
 
     def get_setup(self) -> str:
+        """Return setup JSON enriched with hardware connectivity status.
+
+        Reuses get_hardware_status() so CLI and web share the same
+        connectivity / calibration checks.
+        """
         from roboclaw.embodied.scan import scan_cameras, scan_serial_ports
 
         setup = load_setup()
         setup["scanned_ports"] = scan_serial_ports()
         setup["scanned_cameras"] = scan_cameras()
+
+        hw = self.get_hardware_status()
+        setup["hardware_status"] = {
+            "ready": hw["ready"],
+            "missing": hw["missing"],
+            "arms": hw["arms"],
+            "cameras": hw["cameras"],
+        }
         return json.dumps(setup, indent=2, ensure_ascii=False)
 
     def describe_actions(self, target_action: str = "") -> str:

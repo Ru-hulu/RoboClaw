@@ -37,48 +37,50 @@ class RenameRequest(BaseModel):
     new_alias: str
 
 
-def _try_acquire(service: Any, reason: str) -> None:
-    """Acquire embodiment lock, mapping RuntimeError to HTTP 409."""
-    try:
-        service.acquire_embodiment(reason)
-    except RuntimeError as exc:
-        raise HTTPException(409, str(exc)) from exc
+def _map_service_errors(app: FastAPI) -> None:
+    """Map service-layer exceptions to HTTP status codes.
+
+    EmbodimentBusyError  → 409 Conflict  (lock already held)
+    RuntimeError         → 400 Bad Request (precondition / state errors)
+    PermissionError      → 403 Forbidden
+    """
+    from fastapi.requests import Request
+    from fastapi.responses import JSONResponse
+
+    from roboclaw.embodied.service import EmbodimentBusyError
+
+    @app.exception_handler(EmbodimentBusyError)
+    async def _busy_error(request: Request, exc: EmbodimentBusyError) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(RuntimeError)
+    async def _runtime_error(request: Request, exc: RuntimeError) -> JSONResponse:
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+    @app.exception_handler(PermissionError)
+    async def _permission_error(request: Request, exc: PermissionError) -> JSONResponse:
+        return JSONResponse(status_code=403, content={"detail": str(exc)})
 
 
 def register_setup_routes(app: FastAPI, service: Any) -> None:
     """Register setup wizard API endpoints.
 
-    Hardware acquire/release stays in the route (adapter-level concern for
-    HTTP request scope).  Business logic (scan, motion, previews) goes
-    through EmbodiedService.
+    Lock management lives in ScanningService — routes are thin adapters.
+    Service-layer RuntimeError/PermissionError are mapped to HTTP codes
+    by _map_service_errors().
     """
+    _map_service_errors(app)
 
     @app.post("/api/dashboard/setup/scan")
     async def setup_scan() -> dict[str, Any]:
-        _try_acquire(service, "scanning")
-        try:
-            ports = await asyncio.to_thread(service.scan_ports)
-            cameras = await asyncio.to_thread(service.scan_cameras)
-        except PermissionError as exc:
-            raise HTTPException(403, str(exc)) from exc
-        finally:
-            service.release_embodiment()
-        service.stop_motion_detection()
-        return {"ports": ports, "cameras": cameras}
+        return await asyncio.to_thread(service.scanning.run_full_scan)
 
     @app.post("/api/dashboard/setup/camera-previews")
     async def setup_camera_previews() -> list[dict]:
-        _try_acquire(service, "camera-preview")
-        try:
-            output_dir = str(Path("/tmp/roboclaw-camera-previews"))
-            previews = await asyncio.to_thread(
-                service.capture_camera_previews, output_dir,
-            )
-        except RuntimeError as exc:
-            raise HTTPException(400, str(exc)) from exc
-        finally:
-            service.release_embodiment()
-        return previews
+        output_dir = str(Path("/tmp/roboclaw-camera-previews"))
+        return await asyncio.to_thread(
+            service.scanning.capture_previews, output_dir,
+        )
 
     @app.get("/api/dashboard/setup/camera-preview/{index}")
     async def setup_camera_preview_image(index: int):
@@ -91,29 +93,19 @@ def register_setup_routes(app: FastAPI, service: Any) -> None:
 
     @app.post("/api/dashboard/setup/motion/start")
     async def motion_start() -> dict[str, Any]:
-        _try_acquire(service, "motion-detection")
-        try:
-            port_count = await asyncio.to_thread(service.start_motion_detection)
-        except RuntimeError as exc:
-            service.release_embodiment()
-            raise HTTPException(400, str(exc)) from exc
-        except Exception:
-            service.release_embodiment()
-            raise
+        port_count = await asyncio.to_thread(
+            service.scanning.start_motion_detection,
+        )
         return {"status": "watching", "port_count": port_count}
 
     @app.get("/api/dashboard/setup/motion/poll")
     async def motion_poll() -> dict[str, Any]:
-        try:
-            results = await asyncio.to_thread(service.poll_motion)
-        except RuntimeError as exc:
-            raise HTTPException(400, str(exc)) from exc
+        results = await asyncio.to_thread(service.scanning.poll_motion)
         return {"ports": results}
 
     @app.post("/api/dashboard/setup/motion/stop")
     async def motion_stop() -> dict[str, str]:
-        service.stop_motion_detection()
-        service.release_embodiment()
+        await asyncio.to_thread(service.scanning.stop_motion_detection)
         return {"status": "stopped"}
 
     @app.post("/api/dashboard/setup/arm")

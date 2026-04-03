@@ -35,17 +35,31 @@ def _make_app(session_busy: bool = False) -> FastAPI:
     app = FastAPI()
     svc = MagicMock()
     svc.busy = session_busy
-    if session_busy:
-        svc.acquire_embodiment.side_effect = RuntimeError("Embodiment busy: recording")
 
-    # Wire scanner methods through to a real HardwareScanner for state-dependent tests
+    # Build a scanning sub-object that wraps a real HardwareScanner
+    # so state-dependent tests (motion start/poll/stop) still work.
     scanner = HardwareScanner()
-    svc.scan_ports = scanner.scan_ports
-    svc.scan_cameras = scanner.scan_cameras_list
-    svc.start_motion_detection = scanner.start_motion_detection
-    svc.poll_motion = scanner.poll_motion
-    svc.stop_motion_detection = scanner.stop_motion_detection
-    svc.capture_camera_previews = scanner.capture_camera_previews
+    scanning = MagicMock()
+
+    def _run_full_scan():
+        return {
+            "ports": scanner.scan_ports(),
+            "cameras": scanner.scan_cameras_list(),
+        }
+
+    scanning.run_full_scan = _run_full_scan
+    scanning.capture_previews = scanner.capture_camera_previews
+    scanning.start_motion_detection = scanner.start_motion_detection
+    scanning.poll_motion = scanner.poll_motion
+    scanning.stop_motion_detection = MagicMock(side_effect=lambda: scanner.stop_motion_detection())
+
+    if session_busy:
+        from roboclaw.embodied.service import EmbodimentBusyError
+        scanning.run_full_scan = MagicMock(
+            side_effect=EmbodimentBusyError("Embodiment busy: recording"),
+        )
+
+    svc.scanning = scanning
     app.state.embodied_service = svc
     app.state.setup_wizard = scanner
     register_setup_routes(app, svc)
@@ -99,7 +113,7 @@ def test_motion_start_after_scan() -> None:
 
 def test_motion_start_without_scan_returns_400() -> None:
     app = _make_app()
-    client = TestClient(app)
+    client = TestClient(app, raise_server_exceptions=False)
     resp = client.post("/api/dashboard/setup/motion/start")
     assert resp.status_code == 400
 
@@ -130,7 +144,7 @@ def test_motion_poll_returns_deltas() -> None:
 
 def test_motion_poll_without_start_returns_400() -> None:
     app = _make_app()
-    client = TestClient(app)
+    client = TestClient(app, raise_server_exceptions=False)
     resp = client.get("/api/dashboard/setup/motion/poll")
     assert resp.status_code == 400
 
@@ -141,7 +155,9 @@ def test_motion_stop_clears_state() -> None:
     resp = client.post("/api/dashboard/setup/motion/stop")
     assert resp.status_code == 200
     assert resp.json()["status"] == "stopped"
+    # stop_motion_detection delegates to the real scanner
     assert app.state.setup_wizard.motion_active is False
+    assert app.state.embodied_service.scanning.stop_motion_detection.called
 
 
 def test_add_arm() -> None:
@@ -220,6 +236,6 @@ def test_current_setup() -> None:
 
 def test_scan_returns_409_when_recording() -> None:
     app = _make_app(session_busy=True)
-    client = TestClient(app)
+    client = TestClient(app, raise_server_exceptions=False)
     resp = client.post("/api/dashboard/setup/scan")
     assert resp.status_code == 409

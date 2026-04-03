@@ -75,11 +75,11 @@ class TestSessionLifecycle:
 
     def test_save_episode_no_subprocess(self, client):
         resp = client.post("/api/dashboard/session/episode/save")
-        assert resp.status_code == 500
+        assert resp.status_code == 400
 
     def test_discard_episode_no_subprocess(self, client):
         resp = client.post("/api/dashboard/session/episode/discard")
-        assert resp.status_code == 500
+        assert resp.status_code == 400
 
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ from typing import Any
 from roboclaw.agent.tools.base import Tool
 
 _SETUP_ACTIONS = [
-    "setup_show", "set_arm", "remove_arm", "rename_arm",
+    "setup_show", "scan", "set_arm", "remove_arm", "rename_arm",
     "set_camera", "preview_cameras", "remove_camera", "describe", "doctor",
     "set_hand", "remove_hand",
 ]
@@ -15,9 +15,9 @@ _SETUP_ACTIONS = [
 _TOOL_GROUPS: dict[str, dict[str, Any]] = {
     "embodied_setup": {
         "description": (
-            "Configure robot hardware: show setup, add/remove/rename arms, "
-            "add/remove cameras, describe actions, check environment. "
-            "Also manages dexterous hands: set_hand, remove_hand."
+            "Configure robot hardware: show setup, scan for ports/cameras, "
+            "add/remove/rename arms, add/remove cameras, describe actions, "
+            "check environment. Also manages dexterous hands: set_hand, remove_hand."
         ),
         "actions": _SETUP_ACTIONS,
         "parameters": {
@@ -271,6 +271,27 @@ def create_embodied_tools(tty_handoff: Any = None) -> list[EmbodiedToolGroup]:
     ]
 
 
+def _format_scan(result: dict[str, Any]) -> str:
+    """Format scan results for CLI display."""
+    ports = result["ports"]
+    cameras = result["cameras"]
+    lines = [f"Found {len(ports)} serial port(s) and {len(cameras)} camera(s)."]
+    if ports:
+        lines.append("\nPorts:")
+        for p in ports:
+            port_id = p.get("by_id") or p.get("dev", "?")
+            motors = p.get("motor_ids", [])
+            lines.append(f"  - {port_id}  ({len(motors)} motors)")
+    if cameras:
+        lines.append("\nCameras:")
+        for c in cameras:
+            dev = c.get("dev", "?")
+            w, h = c.get("width", "?"), c.get("height", "?")
+            fps = c.get("fps", "?")
+            lines.append(f"  - {dev}  ({w}x{h} @ {fps}fps)")
+    return "\n".join(lines)
+
+
 def _get_service(service: Any) -> Any:
     """Return the provided service or create a default one."""
     if service is not None:
@@ -289,6 +310,8 @@ async def _dispatch(
     # Config operations — no setup needed
     if action == "setup_show":
         return svc.queries.get_setup()
+    if action == "scan":
+        return _format_scan(svc.scanning.run_full_scan())
     if action == "describe":
         return svc.queries.describe_actions(kwargs.get("target_action", ""))
     if action == "set_arm":

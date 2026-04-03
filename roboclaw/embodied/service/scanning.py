@@ -1,4 +1,8 @@
-"""Scanning sub-service: port/camera scanning and motion detection."""
+"""Scanning sub-service: port/camera scanning and motion detection.
+
+Manages the embodiment lock internally so callers (routes, CLI) don't
+have to coordinate acquire/release themselves.
+"""
 
 from __future__ import annotations
 
@@ -11,11 +15,48 @@ if TYPE_CHECKING:
 
 
 class ScanningService:
-    """Delegates port/camera scanning and motion detection to HardwareScanner."""
+    """Port/camera scanning and motion detection with embodiment locking."""
 
     def __init__(self, parent: EmbodiedService) -> None:
         self._parent = parent
         self._scanner = HardwareScanner()
+
+    # -- Locking scan operations ----------------------------------------------
+
+    def run_full_scan(self) -> dict:
+        """Scan ports + cameras with embodiment lock."""
+        self._parent.acquire_embodiment("scanning")
+        try:
+            ports = self._scanner.scan_ports()
+            cameras = self._scanner.scan_cameras_list()
+            return {"ports": ports, "cameras": cameras}
+        finally:
+            self._parent.release_embodiment()
+
+    def capture_previews(self, output_dir: str) -> list[dict]:
+        """Capture camera previews with embodiment lock."""
+        self._parent.acquire_embodiment("camera-preview")
+        try:
+            return self._scanner.capture_camera_previews(output_dir)
+        finally:
+            self._parent.release_embodiment()
+
+    def start_motion_detection(self) -> int:
+        """Start motion detection — acquires embodiment until stop."""
+        self._parent.acquire_embodiment("motion-detection")
+        try:
+            return self._scanner.start_motion_detection()
+        except Exception:
+            self._parent.release_embodiment()
+            raise
+        # Note: embodiment stays acquired until stop_motion_detection()
+
+    def stop_motion_detection(self) -> None:
+        """Stop motion detection and release the embodiment lock."""
+        self._scanner.stop_motion_detection()
+        self._parent.release_embodiment()
+
+    # -- Non-locking helpers (used internally or by queries) -------------------
 
     def scan_ports(self) -> list[dict]:
         return self._scanner.scan_ports()
@@ -23,14 +64,5 @@ class ScanningService:
     def scan_cameras(self) -> list[dict]:
         return self._scanner.scan_cameras_list()
 
-    def capture_camera_previews(self, output_dir: str) -> list[dict]:
-        return self._scanner.capture_camera_previews(output_dir)
-
-    def start_motion_detection(self) -> int:
-        return self._scanner.start_motion_detection()
-
     def poll_motion(self) -> list[dict]:
         return self._scanner.poll_motion()
-
-    def stop_motion_detection(self) -> None:
-        self._scanner.stop_motion_detection()
