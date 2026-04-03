@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from roboclaw.agent.tools.base import Tool
@@ -311,7 +312,8 @@ async def _dispatch(
     if action == "setup_show":
         return svc.queries.get_setup()
     if action == "scan":
-        return _format_scan(svc.scanning.run_full_scan())
+        result = await asyncio.to_thread(svc.scanning.run_full_scan)
+        return _format_scan(result)
     if action == "describe":
         return svc.queries.describe_actions(kwargs.get("target_action", ""))
     if action == "set_arm":

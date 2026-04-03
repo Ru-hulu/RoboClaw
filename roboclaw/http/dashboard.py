@@ -116,17 +116,26 @@ def register_dashboard_routes(
 
     @app.post("/api/dashboard/session/episode/save")
     async def episode_save() -> dict[str, str]:
-        await service.save_episode()
+        try:
+            await service.save_episode()
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
         return {"status": "episode_saved"}
 
     @app.post("/api/dashboard/session/episode/discard")
     async def episode_discard() -> dict[str, str]:
-        await service.discard_episode()
+        try:
+            await service.discard_episode()
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
         return {"status": "episode_discarded"}
 
     @app.post("/api/dashboard/session/episode/skip-reset")
     async def episode_skip_reset() -> dict[str, str]:
-        await service.skip_reset()
+        try:
+            await service.skip_reset()
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
         return {"status": "reset_skipped"}
 
     # -- Datasets ----------------------------------------------------------

@@ -129,7 +129,7 @@ class QueryService:
         setup["scanned_ports"] = scan_serial_ports()
         setup["scanned_cameras"] = scan_cameras()
 
-        hw = self.get_hardware_status()
+        hw = self.get_hardware_status(setup)
         setup["hardware_status"] = {
             "ready": hw["ready"],
             "missing": hw["missing"],
@@ -210,8 +210,9 @@ class QueryService:
             return "No camera previews captured."
         return _previews_to_multimodal(previews, scanned_cameras)
 
-    def get_hardware_status(self) -> dict[str, Any]:
-        setup = load_setup()
+    def get_hardware_status(self, setup: dict | None = None) -> dict[str, Any]:
+        if setup is None:
+            setup = load_setup()
         arms = setup.get("arms", [])
         cameras = setup.get("cameras", [])
         arm_statuses = [check_arm_status(a) for a in arms]

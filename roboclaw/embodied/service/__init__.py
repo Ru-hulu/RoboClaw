@@ -199,5 +199,7 @@ class EmbodiedService:
             await self.session.stop()
         if self.calibration.active:
             await self.calibration.cancel()
+        if self.scanning.motion_active:
+            self.scanning.stop_motion_detection()
         if self._monitor is not None:
             self._monitor.set_recording_active(False)

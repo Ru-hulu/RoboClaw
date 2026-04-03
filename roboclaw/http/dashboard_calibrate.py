@@ -17,12 +17,16 @@ def register_calibrate_routes(app: FastAPI, service: Any) -> None:
 
     API = "/api/dashboard/calibrate"
 
+    def _handle_calibration_error(exc: RuntimeError) -> None:
+        """Convert calibration RuntimeErrors to appropriate HTTP errors."""
+        raise HTTPException(409, str(exc)) from exc
+
     @app.post(f"{API}/start")
     async def calibrate_start(body: StartCalibrationRequest) -> dict:
         try:
             return await service.start_calibration(body.arm_alias)
         except RuntimeError as exc:
-            raise HTTPException(409, str(exc)) from exc
+            _handle_calibration_error(exc)
 
     @app.get(f"{API}/status")
     async def calibrate_status() -> dict:
@@ -30,15 +34,24 @@ def register_calibrate_routes(app: FastAPI, service: Any) -> None:
 
     @app.post(f"{API}/set-homing")
     async def calibrate_set_homing() -> dict:
-        return await service.set_calibration_homing()
+        try:
+            return await service.set_calibration_homing()
+        except RuntimeError as exc:
+            _handle_calibration_error(exc)
 
     @app.get(f"{API}/positions")
     async def calibrate_positions() -> dict:
-        return await service.read_calibration_positions()
+        try:
+            return await service.read_calibration_positions()
+        except RuntimeError as exc:
+            _handle_calibration_error(exc)
 
     @app.post(f"{API}/finish")
     async def calibrate_finish() -> dict:
-        return await service.finish_calibration()
+        try:
+            return await service.finish_calibration()
+        except RuntimeError as exc:
+            _handle_calibration_error(exc)
 
     @app.post(f"{API}/cancel")
     async def calibrate_cancel() -> dict:

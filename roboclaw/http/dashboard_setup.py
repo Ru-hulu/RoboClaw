@@ -38,11 +38,11 @@ class RenameRequest(BaseModel):
 
 
 def _map_service_errors(app: FastAPI) -> None:
-    """Map service-layer exceptions to HTTP status codes.
+    """Map EmbodimentBusyError to 409 Conflict.
 
-    EmbodimentBusyError  → 409 Conflict  (lock already held)
-    RuntimeError         → 400 Bad Request (precondition / state errors)
-    PermissionError      → 403 Forbidden
+    Only registers a handler for our own custom exception.
+    RuntimeError / PermissionError are too broad — registering global
+    handlers for them would mask real bugs in unrelated routes.
     """
     from fastapi.requests import Request
     from fastapi.responses import JSONResponse
@@ -53,34 +53,33 @@ def _map_service_errors(app: FastAPI) -> None:
     async def _busy_error(request: Request, exc: EmbodimentBusyError) -> JSONResponse:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
 
-    @app.exception_handler(RuntimeError)
-    async def _runtime_error(request: Request, exc: RuntimeError) -> JSONResponse:
-        return JSONResponse(status_code=400, content={"detail": str(exc)})
-
-    @app.exception_handler(PermissionError)
-    async def _permission_error(request: Request, exc: PermissionError) -> JSONResponse:
-        return JSONResponse(status_code=403, content={"detail": str(exc)})
-
 
 def register_setup_routes(app: FastAPI, service: Any) -> None:
     """Register setup wizard API endpoints.
 
     Lock management lives in ScanningService — routes are thin adapters.
-    Service-layer RuntimeError/PermissionError are mapped to HTTP codes
-    by _map_service_errors().
+    EmbodimentBusyError is caught by the global handler registered
+    in _map_service_errors().  RuntimeError / PermissionError are
+    caught locally in each route that can surface them.
     """
     _map_service_errors(app)
 
     @app.post("/api/dashboard/setup/scan")
     async def setup_scan() -> dict[str, Any]:
-        return await asyncio.to_thread(service.scanning.run_full_scan)
+        try:
+            return await asyncio.to_thread(service.scanning.run_full_scan)
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc)) from exc
 
     @app.post("/api/dashboard/setup/camera-previews")
     async def setup_camera_previews() -> list[dict]:
         output_dir = str(Path("/tmp/roboclaw-camera-previews"))
-        return await asyncio.to_thread(
-            service.scanning.capture_previews, output_dir,
-        )
+        try:
+            return await asyncio.to_thread(
+                service.scanning.capture_previews, output_dir,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @app.get("/api/dashboard/setup/camera-preview/{index}")
     async def setup_camera_preview_image(index: int):
@@ -93,14 +92,20 @@ def register_setup_routes(app: FastAPI, service: Any) -> None:
 
     @app.post("/api/dashboard/setup/motion/start")
     async def motion_start() -> dict[str, Any]:
-        port_count = await asyncio.to_thread(
-            service.scanning.start_motion_detection,
-        )
+        try:
+            port_count = await asyncio.to_thread(
+                service.scanning.start_motion_detection,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
         return {"status": "watching", "port_count": port_count}
 
     @app.get("/api/dashboard/setup/motion/poll")
     async def motion_poll() -> dict[str, Any]:
-        results = await asyncio.to_thread(service.scanning.poll_motion)
+        try:
+            results = await asyncio.to_thread(service.scanning.poll_motion)
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
         return {"ports": results}
 
     @app.post("/api/dashboard/setup/motion/stop")

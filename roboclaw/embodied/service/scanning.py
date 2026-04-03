@@ -21,6 +21,10 @@ class ScanningService:
         self._parent = parent
         self._scanner = HardwareScanner()
 
+    @property
+    def motion_active(self) -> bool:
+        return self._scanner.motion_active
+
     # -- Locking scan operations ----------------------------------------------
 
     def run_full_scan(self) -> dict:
@@ -49,20 +53,11 @@ class ScanningService:
         except Exception:
             self._parent.release_embodiment()
             raise
-        # Note: embodiment stays acquired until stop_motion_detection()
 
     def stop_motion_detection(self) -> None:
         """Stop motion detection and release the embodiment lock."""
         self._scanner.stop_motion_detection()
         self._parent.release_embodiment()
-
-    # -- Non-locking helpers (used internally or by queries) -------------------
-
-    def scan_ports(self) -> list[dict]:
-        return self._scanner.scan_ports()
-
-    def scan_cameras(self) -> list[dict]:
-        return self._scanner.scan_cameras_list()
 
     def poll_motion(self) -> list[dict]:
         return self._scanner.poll_motion()
