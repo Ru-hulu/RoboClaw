@@ -127,31 +127,15 @@ class QueryService:
         }
 
     def get_setup(self) -> str:
-        """Return setup JSON enriched with hardware connectivity status.
+        """Return setup config + hardware connectivity status.
 
-        Reuses get_hardware_status() so CLI and web share the same
-        connectivity / calibration checks.
-
-        Note: scan_serial_ports() and scan_cameras() are called directly
-        from roboclaw.embodied.scan (low-level I/O), not through
-        ScanningService. This is intentional — these are read-only probes
-        that don't drive motors, so they don't need the embodiment lock.
-        The ScanningService locking is for operations that interact with
-        motor control or hold resources open (e.g. motion detection).
+        Same data as the web hardware-status endpoint — config + connectivity
+        + calibration + readiness. Discovery of new hardware uses the separate
+        ``scan`` action (service.scanning.run_full_scan).
         """
-        from roboclaw.embodied.scan import scan_cameras, scan_serial_ports
-
         setup = load_setup()
-        setup["scanned_ports"] = scan_serial_ports()
-        setup["scanned_cameras"] = scan_cameras()
-
         hw = self.get_hardware_status(setup)
-        setup["hardware_status"] = {
-            "ready": hw["ready"],
-            "missing": hw["missing"],
-            "arms": hw["arms"],
-            "cameras": hw["cameras"],
-        }
+        setup["hardware_status"] = hw
         return json.dumps(setup, indent=2, ensure_ascii=False)
 
     def describe_actions(self, target_action: str = "") -> str:
