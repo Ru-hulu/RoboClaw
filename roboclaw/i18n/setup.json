@@ -36,8 +36,24 @@
     "en": "{n} unassigned port(s). Move an arm..."
   },
   "detectedMotion": {
-    "zh": "检测到动作: {port}\n  别名 (如 left_follower, right_leader):",
-    "en": "Detected motion on: {port}\n  Alias (e.g. left_follower, right_leader):"
+    "zh": "检测到动作: {port}",
+    "en": "Detected motion on: {port}"
+  },
+  "selectRole": {
+    "zh": "选择角色:",
+    "en": "Select role:"
+  },
+  "followerRole": {
+    "zh": "跟随臂 (follower)",
+    "en": "Follower"
+  },
+  "leaderRole": {
+    "zh": "主臂 (leader)",
+    "en": "Leader"
+  },
+  "aliasPrompt": {
+    "zh": "  别名 (如 left, right):",
+    "en": "  Alias (e.g. left, right):"
   },
   "retryPrompt": {
     "zh": "  重试? (y/n): ",
@@ -54,10 +70,6 @@
   "assigned": {
     "zh": "  已分配: {alias} -> {spec}",
     "en": "  Assigned: {alias} -> {spec}"
-  },
-  "defaultingFollower": {
-    "zh": "  (默认为 {model}_follower)",
-    "en": "  (defaulting to {model}_follower)"
   },
   "cameraNaming": {
     "zh": "\n--- 摄像头命名 ---",

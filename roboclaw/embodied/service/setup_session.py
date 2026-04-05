@@ -54,6 +54,7 @@ class SetupSession:
         self._assignments: list[Assignment] = []
         # Prompting protocol state
         self._awaiting_alias_for: str = ""
+        self._pending_role: str = ""  # "follower" or "leader", set after role selection
         self._pending_kwargs: dict[str, Any] = {}
         self._result: str = ""
         self._camera_index: int = 0
@@ -291,10 +292,16 @@ class SetupSession:
             return self._next_step_idle()
 
         if self._awaiting_alias_for:
-            stable_id = self._awaiting_alias_for
+            lang = self._language
+            if not self._pending_role:
+                return PromptStep(
+                    "role",
+                    t("selectRole", lang),
+                    options=[t("followerRole", lang), t("leaderRole", lang)],
+                )
             return PromptStep(
                 "alias",
-                t("detectedMotion", self._language, port=stable_id[:40]),
+                t("aliasPrompt", lang),
             )
 
         if self._phase in (SetupPhase.ASSIGNING, SetupPhase.IDENTIFYING):
@@ -310,6 +317,10 @@ class SetupSession:
             self._submit_model(answer)
         elif prompt_id == "motion":
             self._awaiting_alias_for = answer
+            port_short = answer.rsplit("/", 1)[-1] if "/" in answer else answer
+            print(t("detectedMotion", self._language, port=port_short))
+        elif prompt_id == "role":
+            self._pending_role = "leader" if answer == "2" else "follower"
         elif prompt_id == "alias":
             self._submit_alias(answer)
         elif prompt_id == "confirm":
@@ -448,14 +459,17 @@ class SetupSession:
     def _submit_alias(self, answer: str) -> None:
         lang = self._language
         stable_id = self._awaiting_alias_for
+        role = self._pending_role or "follower"
         self._awaiting_alias_for = ""
+        self._pending_role = ""
         if not answer:
             print(t("skipped", lang))
             return
-        spec_name = _derive_spec(self._model, answer, lang)
+        alias = f"{answer}_{role}"
+        spec_name = f"{self._model}_{role}"
         try:
-            self.assign(stable_id, answer, spec_name)
-            print(t("assigned", lang, alias=answer, spec=spec_name))
+            self.assign(stable_id, alias, spec_name)
+            print(t("assigned", lang, alias=alias, spec=spec_name))
         except ValueError as exc:
             print(f"  Error: {exc}")
 
@@ -607,11 +621,3 @@ class SetupSession:
             raise ValueError(f"Unknown spec type: {assignment.spec_name}")
 
 
-def _derive_spec(model: str, alias: str, lang: str = "en") -> str:
-    """Derive spec_name from model + alias role hint."""
-    if "leader" in alias:
-        return f"{model}_leader"
-    if "follower" in alias:
-        return f"{model}_follower"
-    print(t("defaultingFollower", lang, model=model))
-    return f"{model}_follower"
