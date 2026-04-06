@@ -475,10 +475,9 @@ class SetupSession:
         lang = self._language
         stable_id = self._awaiting_alias_for
         role = self._pending_role
-        self._awaiting_alias_for = ""
-        self._pending_role = ""
         if not answer:
-            self._messages.append(t("skipped", lang))
+            self._messages.append("  别名不能为空，请重新输入。" if lang == "zh" else "  Alias is required. Please try again.")
+            # Keep _awaiting_alias_for set so next_step re-prompts
             return
         spec = self._current_spec
         alias = f"{answer}_{role}" if role else answer
@@ -486,8 +485,14 @@ class SetupSession:
         try:
             self.assign(stable_id, alias, spec_name)
             self._messages.append(t("assigned", lang, alias=alias, spec=spec_name))
+            self._awaiting_alias_for = ""
+            self._pending_role = ""
         except ValueError as exc:
             self._messages.append(f"  Error: {exc}")
+            # Keep _awaiting_alias_for set so next_step re-prompts for alias
+            # instead of falling back to motion detection
+            self._awaiting_alias_for = stable_id
+            self._pending_role = role
 
     def _submit_confirm(self, answer: str) -> None:
         if answer.lower() == "y":
