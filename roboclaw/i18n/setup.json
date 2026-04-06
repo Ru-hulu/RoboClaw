@@ -110,5 +110,13 @@
   "noAssignments": {
     "zh": "未做任何分配。",
     "en": "No assignments made."
+  },
+  "camera": {
+    "zh": "摄像头",
+    "en": "Camera"
+  },
+  "noConfiguredDevices": {
+    "zh": "暂无配置设备",
+    "en": "No configured devices"
   }
 }

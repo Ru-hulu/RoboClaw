@@ -86,8 +86,13 @@ class TtySession:
 
     @staticmethod
     def _prompting_loop(session: Any) -> str:
+        def _flush() -> None:
+            for msg in session.drain_messages():
+                print(msg)
+
         while True:
             step = session.next_step()
+            _flush()
             if step is None:
                 return session.result()
             if isinstance(step, PollStep):
@@ -100,9 +105,11 @@ class TtySession:
                         return session.result()
                     continue
                 session.submit_answer(step.prompt_id, answer)
+                _flush()
             elif isinstance(step, PromptStep):
                 answer = _run_prompt_step(step)
                 session.submit_answer(step.prompt_id, answer)
+                _flush()
 
 
 def _run_prompt_step(step: PromptStep) -> str:

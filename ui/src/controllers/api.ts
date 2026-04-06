@@ -23,3 +23,15 @@ export function postJson(url: string, body?: unknown) {
     body: body ? JSON.stringify(body) : undefined,
   })
 }
+
+export function patchJson(url: string, body: unknown) {
+  return api(url, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export function deleteApi(url: string) {
+  return api(url, { method: 'DELETE' })
+}

@@ -60,6 +60,12 @@ class SetupSession:
         self._camera_index: int = 0
         self._embodiment_category: str = ""
         self._language: str = "en"
+        self._messages: list[str] = []
+
+    def drain_messages(self) -> list[str]:
+        """Return and clear accumulated messages."""
+        msgs, self._messages = self._messages, []
+        return msgs
 
     @property
     def phase(self) -> SetupPhase:
@@ -325,7 +331,7 @@ class SetupSession:
         elif prompt_id == "motion":
             self._awaiting_alias_for = answer
             port_short = answer.rsplit("/", 1)[-1] if "/" in answer else answer
-            print(t("detectedMotion", self._language, port=port_short))
+            self._messages.append(t("detectedMotion", self._language, port=port_short))
         elif prompt_id == "role":
             spec = self._current_spec
             roles = spec.roles if spec else ("follower", "leader")
@@ -424,24 +430,24 @@ class SetupSession:
         return None
 
     def _do_scan(self, model: str) -> None:
-        """Run full scan and print summary."""
+        """Run full scan and store summary in message buffer."""
         lang = self._language
-        print(t("scanningModel", lang, model=model))
+        self._messages.append(t("scanningModel", lang, model=model))
         try:
             result = self.run_full_scan(model)
         except (ValueError, RuntimeError):
-            print(t("resultNotSupported", lang))
+            self._messages.append(t("resultNotSupported", lang))
             self._set_result("not_supported")
             return
         ports = result["ports"]
         cameras = result["cameras"]
-        print(t("foundPorts", lang, ports=len(ports), cameras=len(cameras)))
+        self._messages.append(t("foundPorts", lang, ports=len(ports), cameras=len(cameras)))
         if not ports and not cameras:
             self._set_result("no_hardware")
             return
         for i, port in enumerate(ports):
             port_id = port.by_id or port.dev or "?"
-            print(f"  [{i}] {port_id}  ({len(port.motor_ids)} {t('motorsFound', lang)})")
+            self._messages.append(f"  [{i}] {port_id}  ({len(port.motor_ids)} {t('motorsFound', lang)})")
 
     def _poll_one_motion(self) -> str | None:
         """Poll motion; return stable_id of first moved port, or None."""
@@ -473,16 +479,16 @@ class SetupSession:
         self._awaiting_alias_for = ""
         self._pending_role = ""
         if not answer:
-            print(t("skipped", lang))
+            self._messages.append(t("skipped", lang))
             return
         spec = self._current_spec
         alias = f"{answer}_{role}" if role else answer
         spec_name = spec.spec_name_for(role) if spec else f"{self._model}_{role}"
         try:
             self.assign(stable_id, alias, spec_name)
-            print(t("assigned", lang, alias=alias, spec=spec_name))
+            self._messages.append(t("assigned", lang, alias=alias, spec=spec_name))
         except ValueError as exc:
-            print(f"  Error: {exc}")
+            self._messages.append(f"  Error: {exc}")
 
     def _submit_confirm(self, answer: str) -> None:
         if answer.lower() == "y":
@@ -505,7 +511,7 @@ class SetupSession:
         if not all_video:
             return None
         if self._camera_index == 0:
-            print(t("cameraNaming", lang))
+            self._messages.append(t("cameraNaming", lang))
         if self._camera_index >= len(all_video):
             return None
         cam = all_video[self._camera_index]
@@ -516,7 +522,7 @@ class SetupSession:
             return self._next_camera_step()
         dev = cam.dev or "?"
         res = f"{cam.width}x{cam.height}" if cam.width else "?"
-        print(f"  [{self._camera_index}] {dev} ({res} @ {cam.fps}fps)")
+        self._messages.append(f"  [{self._camera_index}] {dev} ({res} @ {cam.fps}fps)")
         return PromptStep(
             f"camera_{self._camera_index}",
             t("cameraNamePrompt", lang, index=self._camera_index),
@@ -529,17 +535,17 @@ class SetupSession:
             cam = all_video[idx]
             try:
                 self.assign(cam.stable_id, answer, "opencv")
-                print(t("assigned", self._language, alias=answer, spec="opencv"))
+                self._messages.append(t("assigned", self._language, alias=answer, spec="opencv"))
             except ValueError as exc:
-                print(f"  Error: {exc}")
+                self._messages.append(f"  Error: {exc}")
         self._camera_index = idx + 1
 
     def _show_assignments(self) -> None:
         lang = self._language
-        print(t("assignments", lang, count=len(self._assignments)))
+        self._messages.append(t("assignments", lang, count=len(self._assignments)))
         for a in self._assignments:
             sid = a.interface.stable_id[:30]
-            print(f"  {a.alias} -> {a.spec_name} ({sid}...)")
+            self._messages.append(f"  {a.alias} -> {a.spec_name} ({sid}...)")
 
     def _submit_embodiment_type(self, answer: str) -> None:
         from roboclaw.embodied.embodiment.catalog import EmbodimentCategory
@@ -560,6 +566,7 @@ class SetupSession:
 
     def on_timeout(self) -> None:
         """Called when motion detection times out and user declines retry."""
+        self._cleanup_motion()
         ports = [c for c in self._candidates if isinstance(c, SerialInterface)]
         cameras = [c for c in self._candidates if isinstance(c, VideoInterface)]
         self._set_result("timeout_declined", ports=len(ports), cameras=len(cameras))
@@ -602,6 +609,7 @@ class SetupSession:
 
     def reset(self) -> None:
         """Reset session to idle state."""
+        self._cleanup_motion()
         self._phase = SetupPhase.IDLE
         self._model = ""
         self._discovery = None
@@ -612,6 +620,7 @@ class SetupSession:
         self._result = ""
         self._camera_index = 0
         self._embodiment_category = ""
+        self._messages.clear()
         # Note: do NOT reset self._language here — it persists through reset
 
     @staticmethod

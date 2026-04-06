@@ -2,7 +2,6 @@ import { useEffect } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useWebSocket } from '../controllers/connection'
 import { useDashboard } from '../controllers/dashboard'
-import { useSetup } from '../controllers/setup'
 import { useI18n } from '../controllers/i18n'
 
 export default function Header() {
@@ -47,12 +46,16 @@ export default function Header() {
             {item.label}
           </Link>
         ))}
-        <button
-          onClick={() => useSetup.getState().setOpen(true)}
-          className="px-3 py-1 rounded text-sm text-tx2 hover:text-tx hover:bg-sf transition-colors"
+        <Link
+          to="/setup"
+          className={`px-3 py-1 rounded text-sm transition-colors ${
+            location.pathname === '/setup'
+              ? 'bg-ac/10 text-ac font-medium'
+              : 'text-tx2 hover:text-tx hover:bg-sf'
+          }`}
         >
           {t('setup')}
-        </button>
+        </Link>
       </nav>
 
       <div className="flex-1" />

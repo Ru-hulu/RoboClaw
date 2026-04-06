@@ -1,4 +1,7 @@
-"""Setup wizard REST API routes — thin HTTP shell over EmbodiedService."""
+"""Setup wizard REST API routes — session-based discovery workflow.
+
+Device CRUD has moved to devices.py (/api/devices/*).
+"""
 
 from __future__ import annotations
 
@@ -8,26 +11,10 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from roboclaw.embodied.manifest.helpers import _resolve_serial_interface
 
 
 class ScanRequest(BaseModel):
     model: str = ""
-
-
-class AddArmRequest(BaseModel):
-    alias: str
-    arm_type: str
-    port_id: str
-
-
-class AddCameraRequest(BaseModel):
-    alias: str
-    camera_index: int
-
-
-class RenameRequest(BaseModel):
-    new_alias: str
 
 
 class AssignRequest(BaseModel):
@@ -150,63 +137,7 @@ def register_setup_routes(app: FastAPI, service: Any) -> None:
             raise HTTPException(400, str(exc)) from exc
         return {"status": "committed", "bindings_created": count}
 
-    # -- Direct arm/camera CRUD (legacy, still useful) -----------------------
-
-    @app.post("/api/manifest/arms")
-    async def setup_add_arm(body: AddArmRequest) -> dict[str, Any]:
-        try:
-            interface = await asyncio.to_thread(_resolve_serial_interface, body.port_id)
-            await asyncio.to_thread(service.bind_arm, body.alias, body.arm_type, interface)
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
-        return {"status": "added", "alias": body.alias}
-
-    @app.delete("/api/manifest/arms/{alias}")
-    async def setup_remove_arm(alias: str) -> dict[str, str]:
-        try:
-            await asyncio.to_thread(service.unbind_arm, alias)
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
-        return {"status": "removed", "alias": alias}
-
-    @app.patch("/api/manifest/arms/{alias}")
-    async def setup_rename_arm(alias: str, body: RenameRequest) -> dict[str, str]:
-        try:
-            await asyncio.to_thread(service.rename_arm, alias, body.new_alias)
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
-        return {"status": "renamed", "old": alias, "new": body.new_alias}
-
-    @app.post("/api/manifest/cameras")
-    async def setup_add_camera(body: AddCameraRequest) -> dict[str, Any]:
-        from roboclaw.embodied.hardware.scan import scan_cameras
-
-        try:
-            scanned = await asyncio.to_thread(scan_cameras)
-            if body.camera_index < 0 or body.camera_index >= len(scanned):
-                raise HTTPException(
-                    400,
-                    f"camera_index {body.camera_index} out of range. Found {len(scanned)} camera(s).",
-                )
-            interface = scanned[body.camera_index]
-            if not interface.address:
-                raise HTTPException(
-                    400,
-                    f"Scanned camera at index {body.camera_index} has no usable path.",
-                )
-            await asyncio.to_thread(service.bind_camera, body.alias, interface)
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
-        return {"status": "added", "alias": body.alias}
-
-    @app.delete("/api/manifest/cameras/{alias}")
-    async def setup_remove_camera(alias: str) -> dict[str, str]:
-        try:
-            await asyncio.to_thread(service.unbind_camera, alias)
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
-        return {"status": "removed", "alias": alias}
-
-    @app.get("/api/manifest")
-    async def setup_current() -> dict[str, Any]:
-        return service.manifest.snapshot
+    @app.post("/api/setup/session/reset")
+    async def setup_reset() -> dict[str, str]:
+        service.setup.reset()
+        return {"status": "reset"}
