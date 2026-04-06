@@ -532,9 +532,9 @@ async def _run_preview_cameras() -> str:
 
 
 _MODIFY_DISPATCH = {
-    ("unbind", "arm"): "unbind_arm",
-    ("unbind", "camera"): "unbind_camera",
-    ("unbind", "hand"): "unbind_hand",
+    ("unbind", "arm"): "remove_arm",
+    ("unbind", "camera"): "remove_camera",
+    ("unbind", "hand"): "remove_hand",
     ("rename", "arm"): "rename_arm",
     ("rename", "camera"): "rename_camera",
     ("bind", "camera"): "set_camera",
@@ -556,7 +556,7 @@ async def _run_modify(svc: Any, kwargs: dict[str, Any]) -> str:
         return f"Unknown operation/target: {operation}/{target}"
 
     if operation == "unbind":
-        getattr(svc, method_name)(alias)
+        getattr(svc.manifest, method_name)(alias)
         return f"{target.title()} '{alias}' removed."
 
     if operation == "bind" and target == "camera":
@@ -569,7 +569,7 @@ async def _run_modify(svc: Any, kwargs: dict[str, Any]) -> str:
         if matched is None:
             avail = ", ".join(c.dev for c in cameras) if cameras else "none"
             return f"Camera '{dev}' not found. Available: {avail}"
-        result = svc.set_camera(alias, matched)
+        result = svc.manifest.set_camera(alias, matched)
         data = result.to_dict() if hasattr(result, "to_dict") else str(result)
         return f"Camera '{alias}' bound to {dev}.\n{json.dumps(data, indent=2) if isinstance(data, dict) else data}"
 
@@ -587,7 +587,7 @@ async def _run_modify(svc: Any, kwargs: dict[str, Any]) -> str:
         if matched is None:
             avail = ", ".join(p.by_id or p.dev for p in ports) if ports else "none"
             return f"Port '{port}' not found. Available: {avail}"
-        result = svc.set_arm(alias, arm_type, matched)
+        result = svc.manifest.set_arm(alias, arm_type, matched)
         data = result.to_dict() if hasattr(result, "to_dict") else str(result)
         return f"Arm '{alias}' ({arm_type}) bound to {port}.\n{json.dumps(data, indent=2) if isinstance(data, dict) else data}"
 
@@ -599,13 +599,13 @@ async def _run_modify(svc: Any, kwargs: dict[str, Any]) -> str:
             return "rebind requires new_type (e.g., 'koch_follower')."
         if not new_alias:
             new_alias = alias
-        result = svc.rebind_arm(alias, new_alias, new_type)
+        result = svc.manifest.rebind_arm(alias, new_alias, new_type)
         return f"Arm rebound: '{alias}' → '{new_alias}' ({new_type}).\n{json.dumps(result, indent=2)}"
 
     # rename
     if not new_alias:
         return "rename requires new_alias."
-    result = getattr(svc, method_name)(alias, new_alias)
+    result = getattr(svc.manifest, method_name)(alias, new_alias)
     data = result.to_dict() if hasattr(result, "to_dict") else result
     return f"{target.title()} renamed '{alias}' → '{new_alias}'.\n{json.dumps(data, indent=2)}"
 
