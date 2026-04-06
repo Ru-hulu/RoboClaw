@@ -306,16 +306,7 @@ export const useSetup = create<SetupStore>((set, get) => ({
     try {
       await deleteApi(`${SETUP}/session/assign/${encodeURIComponent(alias)}`)
       await get().refreshSession()
-      // Bust browser cache on existing preview URLs (can't re-capture
-      // while motion detection holds the embodiment lock)
-      set((s) => ({
-        scannedCameras: s.scannedCameras.map((c) => ({
-          ...c,
-          preview_url: c.preview_url
-            ? `${SETUP}/previews/${c.index}?t=${Date.now()}`
-            : c.preview_url,
-        })),
-      }))
+      get().doCapturePreview()
     } catch (e: unknown) {
       set({ error: (e as Error).message })
     }
