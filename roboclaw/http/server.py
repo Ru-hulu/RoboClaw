@@ -343,8 +343,11 @@ def _ensure_ui_build() -> None:
     if not node_modules.is_dir():
         logger.info("Installing frontend dependencies …")
         subprocess.run([npm, "install"], cwd=str(ui_root), check=True)
-    subprocess.run([npm, "run", "build"], cwd=str(ui_root), check=True)
-    logger.info("Frontend rebuild complete")
+    result = subprocess.run([npm, "run", "build"], cwd=str(ui_root))
+    if result.returncode != 0:
+        logger.warning("Frontend build failed (exit {}), serving stale dist", result.returncode)
+    else:
+        logger.info("Frontend rebuild complete")
 
 
 def main(

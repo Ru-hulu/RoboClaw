@@ -304,7 +304,7 @@ export const useDashboard = create<DashboardStore>((set, get) => ({
 
   deleteDataset: async (name) => {
     try {
-      await api(`${API}/datasets/${encodeURIComponent(name)}`, { method: 'DELETE' })
+      await api(`${DATASETS}/${encodeURIComponent(name)}`, { method: 'DELETE' })
       get().addLog(`Dataset deleted: ${name}`, 'info')
       get().loadDatasets()
     } catch (e: unknown) {
