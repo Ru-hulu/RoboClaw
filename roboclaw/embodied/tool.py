@@ -7,7 +7,7 @@ from typing import Any
 
 from roboclaw.agent.tools.base import Tool
 
-_SETUP_ACTIONS = ["identify", "modify", "scan", "probe", "motion_start", "motion_poll", "motion_stop"]
+_SETUP_ACTIONS = ["identify", "modify", "scan", "probe", "motion_start", "motion_poll", "motion_stop", "preview_cameras"]
 _DOCTOR_ACTIONS = ["check"]
 _CALIBRATION_ACTIONS = ["calibrate"]
 _TELEOP_ACTIONS = ["teleoperate"]
@@ -361,6 +361,8 @@ class EmbodiedToolGroup(Tool):
             return await _run_with_service(svc, lambda _: _run_motion_poll(svc))
         if action == "motion_stop":
             return await _run_with_service(svc, lambda _: _run_motion_stop(svc))
+        if action == "preview_cameras":
+            return await _run_with_service(svc, lambda _: _run_preview_cameras())
         # modify (bind, unbind, rename, rebind)
         return await _run_with_service(
             svc,
@@ -503,6 +505,30 @@ async def _run_motion_stop(svc: Any) -> str:
         return "Motion detection stopped."
     except RuntimeError as exc:
         return f"Cannot stop motion detection: {exc}"
+
+
+async def _run_preview_cameras() -> str:
+    """Open a live camera preview in the browser. Returns URL."""
+    from roboclaw.embodied.hardware.scan import scan_cameras
+    import webbrowser
+    cameras = scan_cameras()
+    if not cameras:
+        return "No cameras detected."
+    cam_dict: dict[int, str] = {}
+    for cam in cameras:
+        dev = cam.dev or ""
+        if dev.startswith("/dev/video"):
+            try:
+                cam_dict[int(dev.replace("/dev/video", ""))] = dev
+            except ValueError:
+                pass
+    if not cam_dict:
+        return "No video devices found."
+    from roboclaw.embodied.hardware.camera_preview import CameraPreviewServer
+    srv = CameraPreviewServer(cam_dict)
+    url = srv.start()
+    webbrowser.open(url)
+    return f"Camera preview opened at {url}\nClose the browser tab when done. The server will auto-stop on next action."
 
 
 _MODIFY_DISPATCH = {

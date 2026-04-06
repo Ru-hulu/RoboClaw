@@ -114,7 +114,7 @@ def test_create_embodied_tools_returns_eight_groups() -> None:
 @pytest.mark.parametrize(
     ("tool_name", "expected_actions", "included", "excluded"),
     [
-        ("setup", {"identify", "modify", "scan", "probe", "motion_start", "motion_poll", "motion_stop"}, {"model", "target", "operation", "alias", "new_alias", "new_type", "arm_type", "port", "dev"}, {"arms", "dataset_name", "positions"}),
+        ("setup", {"identify", "modify", "scan", "probe", "motion_start", "motion_poll", "motion_stop", "preview_cameras"}, {"model", "target", "operation", "alias", "new_alias", "new_type", "arm_type", "port", "dev"}, {"arms", "dataset_name", "positions"}),
         ("doctor", {"check"}, set(), {"alias", "arms", "dataset_name"}),
         ("calibration", {"calibrate"}, {"arms"}, {"port", "dataset_name", "positions"}),
         ("teleop", {"teleoperate"}, {"arms", "fps"}, {"dataset_name", "checkpoint_path", "positions"}),

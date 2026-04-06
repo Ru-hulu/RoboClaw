@@ -24,6 +24,7 @@ Read current manifest state (via doctor or status) before deciding what to do. C
 | `setup(action="motion_poll")` | Poll which port moved | After motion_start, while user is moving an arm |
 | `setup(action="motion_stop")` | Stop motion detection | After identification is done |
 | `setup(action="modify", operation="bind", target="arm", alias="...", arm_type="...", port="...")` | Bind a port as an arm | When you know which port + type |
+| `setup(action="preview_cameras")` | Open live camera preview in browser | Before naming cameras, or when user says "预览相机" |
 | `setup(action="modify", operation="bind", target="camera", alias="...", dev="...")` | Bind a camera | When you know which camera device |
 | `setup(action="modify", operation="unbind", target="arm\|camera", alias="...")` | Remove a device | When user wants to remove config |
 | `setup(action="modify", operation="rename", target="arm\|camera", alias="...", new_alias="...")` | Rename a device | When user wants to change a name |
@@ -32,7 +33,8 @@ Read current manifest state (via doctor or status) before deciding what to do. C
 
 ### Decision rules
 
-- **"配置相机" / "add camera"** → scan → show cameras → bind_camera
+- **"配置相机" / "add camera"** → scan → preview_cameras (让用户看画面) → bind_camera
+- **"预览相机" / "show camera"** → preview_cameras
 - **"配置臂" / "add arm" (user knows which is which)** → scan → probe → bind_arm
 - **"配置臂" (user doesn't know which port)** → scan → motion_start → motion_poll (user moves arm) → bind_arm → motion_stop
 - **"改角色" / "change role"** → rebind_arm (one step, no scan needed)
