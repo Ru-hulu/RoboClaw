@@ -90,20 +90,20 @@ export default function SettingsView() {
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
-      <div className="border-b border-bd/40 p-4">
+      <div className="border-b border-bd/50 px-6 py-4 bg-sf">
         <h2 className="text-xl font-bold tracking-tight">{t('settingsTitle')}</h2>
-        <p className="mt-1.5 text-sm text-tx2">{t('settingsDesc')}</p>
+        <p className="mt-1 text-sm text-tx3">{t('settingsDesc')}</p>
       </div>
 
-      <div className="flex-1 p-5 max-w-3xl space-y-8">
-        {/* Section 1: Hardware Configuration */}
-        <section className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold text-tx">{t('settingsHardware')}</h3>
+      <div className="flex-1 p-6 max-w-4xl space-y-6">
+        {/* Hardware section */}
+        <section className="bg-sf rounded-xl p-5 shadow-card shadow-inset-ac">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-bold text-tx uppercase tracking-wide">{t('settingsHardware')}</h3>
             {!wizardActive && (
               <button
                 onClick={startWizard}
-                className="px-4 py-2 bg-ac text-white rounded-lg text-sm font-medium transition-colors hover:bg-ac2 active:scale-[0.97]"
+                className="px-4 py-2 bg-ac text-white rounded-lg text-sm font-semibold transition-all hover:bg-ac2 active:scale-[0.97] shadow-glow-ac"
               >
                 {t('addDevice')}
               </button>
@@ -111,22 +111,26 @@ export default function SettingsView() {
           </div>
 
           <DeviceList onCalibrate={handleCalibrate} />
-          {wizardActive && <DiscoveryWizard />}
+          {wizardActive && <div className="mt-4"><DiscoveryWizard /></div>}
 
           {camerasExist && !sessionBusy && (
-            <CameraPreviewPanel cameras={hwStatus!.cameras} busy={sessionBusy} />
+            <div className="mt-4">
+              <CameraPreviewPanel cameras={hwStatus!.cameras} busy={sessionBusy} />
+            </div>
           )}
 
-          <ServoPanel state={session.state} />
+          <div className="mt-4">
+            <ServoPanel state={session.state} />
+          </div>
         </section>
 
-        {/* Section 2: AI Provider */}
-        <section className="space-y-4">
-          <h3 className="text-lg font-semibold text-tx">{t('settingsProvider')}</h3>
+        {/* Provider section */}
+        <section className="bg-sf rounded-xl p-5 shadow-card shadow-inset-yl">
+          <h3 className="text-sm font-bold text-tx uppercase tracking-wide mb-4">{t('settingsProvider')}</h3>
 
-          {providerLoading && <p className="text-tx2">{t('loading')}</p>}
+          {providerLoading && <p className="text-tx3 text-sm">{t('loading')}</p>}
           {!providerLoading && (
-            <form onSubmit={handleSave} className="space-y-5">
+            <form onSubmit={handleSave} className="space-y-4">
               {error && (
                 <div className="rounded-lg border border-rd/30 border-l-4 border-l-rd bg-rd/5 p-3 text-sm text-rd">
                   {error}
@@ -138,45 +142,44 @@ export default function SettingsView() {
                 </div>
               )}
 
-              <div className="rounded-lg border border-bd/30 bg-white p-6 shadow-card space-y-4">
-                <h4 className="text-xs text-tx2 uppercase tracking-wider font-medium">{t('globalProvider')}</h4>
+              <label className="flex flex-col gap-1 text-xs text-tx2 font-medium">
+                {t('baseUrl')}
+                <input
+                  value={apiBase}
+                  onChange={(e) => setApiBase(e.target.value)}
+                  className="bg-bg border border-bd text-tx px-3 py-2.5 rounded-lg text-sm
+                    focus:outline-none focus:border-ac focus:shadow-glow-ac placeholder:text-tx3"
+                  placeholder="https://your-openai-compatible-endpoint/v1"
+                />
+              </label>
 
-                <label className="flex flex-col gap-1 text-xs text-tx2">
-                  {t('baseUrl')}
-                  <input
-                    value={apiBase}
-                    onChange={(e) => setApiBase(e.target.value)}
-                    className="bg-sf2 border border-bd text-tx px-3 py-2 rounded text-sm focus:outline-none focus:border-ac focus:shadow-glow-ac placeholder:text-tx3"
-                    placeholder="https://your-openai-compatible-endpoint/v1"
-                  />
-                </label>
+              <label className="flex flex-col gap-1 text-xs text-tx2 font-medium">
+                {t('apiKey')}
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  className="bg-bg border border-bd text-tx px-3 py-2.5 rounded-lg text-sm
+                    focus:outline-none focus:border-ac focus:shadow-glow-ac placeholder:text-tx3"
+                  placeholder={t('apiKeyPlaceholder')}
+                />
+              </label>
 
-                <label className="flex flex-col gap-1 text-xs text-tx2">
-                  {t('apiKey')}
-                  <input
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    className="bg-sf2 border border-bd text-tx px-3 py-2 rounded text-sm focus:outline-none focus:border-ac focus:shadow-glow-ac placeholder:text-tx3"
-                    placeholder={t('apiKeyPlaceholder')}
-                  />
-                </label>
-
-                <div className="rounded-lg border border-bd/30 bg-sf p-3 text-sm text-tx2">
-                  <div>{t('savedStatus')}: {hasSavedKey ? t('saved') : t('notSaved')}</div>
-                  {savedKeyMask && <div>{t('savedKey')}: {savedKeyMask}</div>}
-                </div>
+              <div className="rounded-lg bg-bg border border-bd/50 p-3 text-sm text-tx3 font-mono text-xs">
+                {t('savedStatus')}: {hasSavedKey ? <span className="text-gn font-medium">{t('saved')}</span> : <span className="text-yl">{t('notSaved')}</span>}
+                {savedKeyMask && <span className="ml-3">{savedKeyMask}</span>}
               </div>
 
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-3">
                 <button
                   type="submit"
                   disabled={saving}
-                  className="bg-gn text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors hover:bg-gn/90 active:scale-[0.97] disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="bg-gn text-white px-5 py-2.5 rounded-lg text-sm font-semibold transition-all
+                    hover:bg-gn/90 active:scale-[0.97] disabled:opacity-30 disabled:cursor-not-allowed shadow-glow-gn"
                 >
                   {saving ? t('saving') : t('saveSettings')}
                 </button>
-                <span className="text-sm text-tx2">{t('saveRedirectHint')}</span>
+                <span className="text-xs text-tx3">{t('saveRedirectHint')}</span>
               </div>
             </form>
           )}

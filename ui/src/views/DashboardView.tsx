@@ -2,37 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDashboard, type SessionState } from '../controllers/dashboard'
 import { useI18n } from '../controllers/i18n'
-
-type BtnVariant = 'gn' | 'rd' | 'yl' | 'ac'
-const variantCls: Record<BtnVariant, string> = {
-  gn: 'border-gn/60 text-gn hover:border-gn hover:bg-gn/10',
-  rd: 'border-rd/60 text-rd hover:border-rd hover:bg-rd/10',
-  yl: 'border-yl/60 text-yl hover:border-yl hover:bg-yl/10',
-  ac: 'border-ac/60 text-ac hover:border-ac hover:bg-ac/10',
-}
-
-function Btn({
-  children,
-  disabled,
-  onClick,
-  variant = 'ac',
-}: {
-  children: React.ReactNode
-  disabled?: boolean
-  onClick?: () => void
-  variant?: BtnVariant
-}) {
-  return (
-    <button
-      disabled={disabled}
-      onClick={onClick}
-      className={`px-3.5 py-1.5 border rounded text-sm bg-white transition-colors active:scale-[0.97]
-        disabled:opacity-30 disabled:cursor-not-allowed ${variantCls[variant]}`}
-    >
-      {children}
-    </button>
-  )
-}
+import { CameraPreviewPanel } from '../components/CameraPreviewPanel'
+import { ServoPanel } from '../components/ServoPanel'
 
 function canDo(state: SessionState, hwReady: boolean) {
   const idle = state === 'idle'
@@ -48,6 +19,30 @@ function canDo(state: SessionState, hwReady: boolean) {
   }
 }
 
+function ActionBtn({
+  children, disabled, onClick, color,
+}: {
+  children: React.ReactNode; disabled?: boolean; onClick?: () => void
+  color: 'ac' | 'gn' | 'rd' | 'yl'
+}) {
+  const cls: Record<string, string> = {
+    ac: 'bg-ac hover:bg-ac2 shadow-glow-ac',
+    gn: 'bg-gn hover:bg-gn/90 shadow-glow-gn',
+    rd: 'bg-rd hover:bg-rd/90 shadow-glow-rd',
+    yl: 'bg-yl hover:bg-yl/90 shadow-glow-yl',
+  }
+  return (
+    <button
+      disabled={disabled}
+      onClick={onClick}
+      className={`w-full px-4 py-2.5 rounded-lg text-sm font-semibold text-white transition-all
+        active:scale-[0.97] disabled:opacity-25 disabled:cursor-not-allowed disabled:shadow-none ${cls[color]}`}
+    >
+      {children}
+    </button>
+  )
+}
+
 export default function DashboardView() {
   const store = useDashboard()
   const { session, logs, datasets, loading, hardwareStatus: hwStatus } = store
@@ -57,19 +52,6 @@ export default function DashboardView() {
   const logRef = useRef<HTMLDivElement>(null)
   const { t } = useI18n()
   const navigate = useNavigate()
-
-  const stateLabel: Record<SessionState, string> = {
-    idle: t('stateConnected'),
-    preparing: t('hwInitializing'),
-    teleoperating: t('stateTeleoperating'),
-    recording: t('stateRecording'),
-  }
-  const stateBadgeCls: Record<SessionState, string> = {
-    idle: 'bg-gn/10 text-gn',
-    preparing: 'bg-yl/10 text-yl',
-    teleoperating: 'bg-ac/10 text-ac',
-    recording: 'bg-yl/10 text-yl',
-  }
 
   const [task, setTask] = useState('')
   const [numEp, setNumEp] = useState(10)
@@ -100,15 +82,31 @@ export default function DashboardView() {
     })
   }
 
+  const stateLabel: Record<string, string> = {
+    preparing: t('hwInitializing'),
+    teleoperating: t('stateTeleoperating'),
+    recording: t('stateRecording'),
+  }
+  const stateBadgeCls: Record<string, string> = {
+    preparing: 'bg-yl/15 text-yl border-yl/30',
+    teleoperating: 'bg-ac/15 text-ac border-ac/30',
+    recording: 'bg-rd/15 text-rd border-rd/30',
+  }
+
+  const hwAccent = !hwStatus ? 'shadow-inset-ac' : hwStatus.ready ? 'shadow-inset-gn' : 'shadow-inset-yl'
+  const camerasExist = hwStatus && hwStatus.cameras.length > 0 && hwStatus.cameras.some((c: any) => c.connected)
+  const pct = targetEpisodes > 0 ? Math.round((savedEpisodes / targetEpisodes) * 100) : 0
+
   return (
     <div className="flex flex-col h-full">
+      {/* Active state banner */}
       {state !== 'idle' && (
-        <div className="flex items-center gap-3 px-4 py-2 border-b border-bd/40 text-sm flex-wrap">
-          <span className={`px-2 py-0.5 rounded text-xs font-semibold ${stateBadgeCls[state]}`}>
+        <div className="flex items-center gap-3 px-4 py-2 border-b border-bd/60 text-sm bg-sf">
+          <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${stateBadgeCls[state]}`}>
             {stateLabel[state]}
           </span>
           {state === 'recording' && (
-            <span className="text-tx2">{t('savedEpisodes')}: {savedEpisodes} / {targetEpisodes}</span>
+            <span className="text-tx2 font-mono text-xs">{t('savedEpisodes')}: {savedEpisodes} / {targetEpisodes}</span>
           )}
         </div>
       )}
@@ -120,13 +118,13 @@ export default function DashboardView() {
       )}
 
       {!hwReady && hwStatus && (
-        <div className="px-4 py-2 bg-yl/10 border-b border-yl/30 border-l-4 border-l-yl text-yl text-sm">
+        <div className="px-4 py-2.5 bg-yl/8 border-b border-yl/20 text-yl text-sm font-medium">
           {hwStatus.missing.join(' · ')}
         </div>
       )}
 
       {session.rerun_web_port > 0 && (state === 'teleoperating' || state === 'recording') && (
-        <div className="border-b border-bd bg-black/5">
+        <div className="border-b border-bd">
           <iframe
             src={`${location.protocol}//${location.hostname}:${session.rerun_web_port}`}
             className="w-full border-0"
@@ -136,141 +134,166 @@ export default function DashboardView() {
         </div>
       )}
 
-      <div className="flex-1 grid grid-cols-[1fr_320px] overflow-hidden max-[900px]:grid-cols-1">
-        <div className="flex flex-col overflow-y-auto p-4 space-y-3">
-          {/* Hardware status card */}
-          <div
-            onClick={() => navigate('/settings')}
-            className="bg-white border border-bd/30 rounded-lg p-4 shadow-card cursor-pointer
-                       hover:border-ac/40 hover:shadow-glow-ac transition-all group"
-          >
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <span className="text-2xs text-tx2 font-medium">{t('arms')}</span>
-                <div className="flex items-center gap-1">
-                  {hwStatus?.arms.map(arm => (
-                    <span key={arm.alias}
-                      className={`w-2.5 h-2.5 rounded-full ${!arm.connected ? 'bg-rd' : !arm.calibrated ? 'bg-yl' : 'bg-gn'}`}
-                      title={arm.alias + (!arm.connected ? ' — disconnected' : !arm.calibrated ? ' — uncalibrated' : '')}
-                    />
-                  ))}
+      {/* Main layout */}
+      <div className="flex-1 grid grid-cols-[1fr_280px] overflow-hidden max-[900px]:grid-cols-1">
+        {/* Left: controls + monitoring */}
+        <div className="flex flex-col overflow-y-auto">
+          {/* Top row: 3 control cards horizontal */}
+          <div className="flex gap-3 p-4 pb-2 max-[900px]:flex-col">
+            {/* Hardware status — clickable */}
+            <div
+              onClick={() => navigate('/settings')}
+              className={`w-[170px] max-[900px]:w-full shrink-0 bg-sf rounded-lg p-3.5 cursor-pointer
+                ${hwAccent} transition-all hover:shadow-card-hover animate-slide-up stagger-1`}
+            >
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-2xs text-tx3 font-mono uppercase tracking-widest">{t('arms')}</span>
+                  <div className="flex items-center gap-1">
+                    {hwStatus?.arms.map(arm => (
+                      <span key={arm.alias}
+                        className={`w-2.5 h-2.5 rounded-full ring-2 ring-white ${!arm.connected ? 'bg-rd' : !arm.calibrated ? 'bg-yl' : 'bg-gn'}`}
+                        title={arm.alias}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-2xs text-tx3 font-mono uppercase tracking-widest">{t('cameras')}</span>
+                  <div className="flex items-center gap-1">
+                    {hwStatus?.cameras.map(cam => (
+                      <span key={cam.alias}
+                        className={`w-2.5 h-2.5 rounded-full ring-2 ring-white ${cam.connected ? 'bg-gn' : 'bg-rd'}`}
+                        title={cam.alias}
+                      />
+                    ))}
+                  </div>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="text-2xs text-tx2 font-medium">{t('cameras')}</span>
-                <div className="flex items-center gap-1">
-                  {hwStatus?.cameras.map(cam => (
-                    <span key={cam.alias}
-                      className={`w-2.5 h-2.5 rounded-full ${cam.connected ? 'bg-gn' : 'bg-rd'}`}
-                      title={cam.alias}
-                    />
-                  ))}
+              <div className="mt-2 text-2xs text-tx3 font-medium group-hover:text-ac">
+                {hwStatus?.ready ? t('hwReady') : `${hwStatus?.missing?.length ?? 0} ${t('warnings')}`}
+              </div>
+            </div>
+
+            {/* Teleop */}
+            <div className="w-[190px] max-[900px]:w-full shrink-0 bg-sf rounded-lg p-3.5 shadow-card animate-slide-up stagger-2">
+              <h3 className="text-2xs text-tx3 font-mono uppercase tracking-widest mb-3">{t('teleoperation')}</h3>
+              <div className="space-y-2">
+                <ActionBtn color="ac" disabled={!ok.teleopStart || !!loading} onClick={store.doTeleopStart}>
+                  {loading === 'teleop' ? t('startingTeleop') : t('startTeleop')}
+                </ActionBtn>
+                <ActionBtn color="yl" disabled={!ok.teleopStop || !!loading} onClick={store.doTeleopStop}>
+                  {t('stopTeleop')}
+                </ActionBtn>
+              </div>
+              {(loading === 'teleop' || state === 'teleoperating') && (
+                <div className="mt-3 flex items-center gap-2 text-xs text-ac font-medium">
+                  <span className="w-2 h-2 rounded-full bg-ac animate-pulse" />
+                  {loading === 'teleop' ? t('hwInitializing') : t('stateTeleoperating')}
                 </div>
-              </div>
-            </div>
-            <div className="text-2xs mt-1.5 text-tx3 group-hover:text-ac transition-colors">
-              {hwStatus?.ready ? t('hwReady') : `${hwStatus?.missing?.length ?? 0} ${t('warnings')}`}
-            </div>
-          </div>
-
-          {/* Teleop card */}
-          <div className="bg-white border border-bd/30 rounded-lg p-5 shadow-card">
-            <h3 className="text-xs text-tx2 uppercase tracking-wider mb-2 font-medium">{t('teleoperation')}</h3>
-            <div className="flex gap-2 flex-wrap">
-              <Btn variant="ac" disabled={!ok.teleopStart || !!loading} onClick={store.doTeleopStart}>
-                {loading === 'teleop' ? t('startingTeleop') : t('startTeleop')}
-              </Btn>
-              <Btn variant="yl" disabled={!ok.teleopStop || !!loading} onClick={store.doTeleopStop}>
-                {t('stopTeleop')}
-              </Btn>
-            </div>
-            {(loading === 'teleop' || state === 'teleoperating') && (
-              <div className="mt-2 flex items-center gap-2 text-sm text-ac">
-                <span className="inline-block w-2 h-2 rounded-full bg-ac animate-pulse" />
-                {loading === 'teleop' ? t('hwInitializing') : t('stateTeleoperating')}
-              </div>
-            )}
-          </div>
-
-          {/* Recording card */}
-          <div className="bg-white border border-bd/30 rounded-lg p-5 shadow-card">
-            <h3 className="text-xs text-tx2 uppercase tracking-wider mb-3 font-medium">{t('recording')}</h3>
-
-            <div className="flex gap-2 flex-wrap mb-3">
-              <label className="flex flex-col gap-1 text-xs text-tx2 flex-1 min-w-[160px]">
-                {t('taskDesc')}
-                <input
-                  value={task}
-                  onChange={(e) => setTask(e.target.value)}
-                  placeholder="Pick up the red block"
-                  className="bg-sf2 border border-bd text-tx px-3 py-2 rounded text-sm focus:outline-none focus:border-ac focus:shadow-glow-ac placeholder:text-tx3"
-                />
-              </label>
+              )}
             </div>
 
-            <div className="flex gap-2 flex-wrap mb-3 items-end">
-              <label className="flex flex-col gap-1 text-xs text-tx2 w-[90px]">
-                {t('numEpisodes')}
-                <input
-                  type="number"
-                  value={numEp}
-                  onChange={(e) => setNumEp(Number(e.target.value) || 10)}
-                  min={1}
-                  className="bg-sf2 border border-bd text-tx px-3 py-2 rounded text-sm focus:outline-none focus:border-ac focus:shadow-glow-ac placeholder:text-tx3"
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-xs text-tx2 w-[100px]">
-                Ep time (s)
-                <input
-                  type="number"
-                  value={episodeTime}
-                  onChange={(e) => setEpisodeTime(Number(e.target.value) || 300)}
-                  min={1}
-                  className="bg-sf2 border border-bd text-tx px-3 py-2 rounded text-sm focus:outline-none focus:border-ac focus:shadow-glow-ac placeholder:text-tx3"
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-xs text-tx2 w-[100px]">
-                Reset (s)
-                <input
-                  type="number"
-                  value={resetTime}
-                  onChange={(e) => setResetTime(Number(e.target.value) || 10)}
-                  min={0}
-                  className="bg-sf2 border border-bd text-tx px-3 py-2 rounded text-sm focus:outline-none focus:border-ac focus:shadow-glow-ac placeholder:text-tx3"
-                />
-              </label>
-              <div className="flex gap-2 flex-1 justify-end">
-                <Btn variant="gn" disabled={!ok.recStart || !!loading} onClick={handleRecordStart}>
-                  {loading === 'record' ? t('startingRecord') : t('startRecording')}
-                </Btn>
-                <Btn variant="rd" disabled={!ok.recStop} onClick={store.doRecordStop}>
-                  {t('stopRecording')}
-                </Btn>
-              </div>
-            </div>
+            {/* Recording */}
+            <div className="flex-1 min-w-0 bg-sf rounded-lg p-3.5 shadow-card animate-slide-up stagger-3">
+              <h3 className="text-2xs text-tx3 font-mono uppercase tracking-widest mb-3">{t('recording')}</h3>
 
-            {state === 'recording' && (
-              <RecordingProgress
-                episodePhase={episodePhase}
-                savedEpisodes={savedEpisodes}
-                targetEpisodes={targetEpisodes}
-                onSave={store.doSaveEpisode}
-                onDiscard={store.doDiscardEpisode}
-                onSkipReset={store.doSkipReset}
-                t={t}
+              <input
+                value={task}
+                onChange={(e) => setTask(e.target.value)}
+                placeholder="Pick up the red block"
+                className="w-full bg-sf2 border border-bd text-tx px-3 py-2 rounded-lg text-sm
+                  focus:outline-none focus:border-ac focus:shadow-glow-ac placeholder:text-tx3 mb-3"
               />
+
+              <div className="flex gap-2 items-end flex-wrap">
+                <label className="flex flex-col gap-1 text-2xs text-tx3 font-mono w-[72px]">
+                  {t('numEpisodes')}
+                  <input type="number" value={numEp} onChange={(e) => setNumEp(Number(e.target.value) || 10)} min={1}
+                    className="bg-sf2 border border-bd text-tx px-2 py-1.5 rounded text-sm font-mono focus:outline-none focus:border-ac" />
+                </label>
+                <label className="flex flex-col gap-1 text-2xs text-tx3 font-mono w-[80px]">
+                  {t('epTime')}
+                  <input type="number" value={episodeTime} onChange={(e) => setEpisodeTime(Number(e.target.value) || 300)} min={1}
+                    className="bg-sf2 border border-bd text-tx px-2 py-1.5 rounded text-sm font-mono focus:outline-none focus:border-ac" />
+                </label>
+                <label className="flex flex-col gap-1 text-2xs text-tx3 font-mono w-[80px]">
+                  {t('resetTime')}
+                  <input type="number" value={resetTime} onChange={(e) => setResetTime(Number(e.target.value) || 10)} min={0}
+                    className="bg-sf2 border border-bd text-tx px-2 py-1.5 rounded text-sm font-mono focus:outline-none focus:border-ac" />
+                </label>
+                <div className="flex gap-2 ml-auto">
+                  <ActionBtn color="gn" disabled={!ok.recStart || !!loading} onClick={handleRecordStart}>
+                    {loading === 'record' ? t('startingRecord') : t('startRecording')}
+                  </ActionBtn>
+                  <ActionBtn color="rd" disabled={!ok.recStop} onClick={store.doRecordStop}>
+                    {t('stopRecording')}
+                  </ActionBtn>
+                </div>
+              </div>
+
+              {state === 'recording' && (
+                <div className="mt-3 pt-3 border-t border-bd/40">
+                  <div className="flex items-center justify-between text-xs mb-1.5">
+                    <span className="font-mono text-tx2">{savedEpisodes} / {targetEpisodes}</span>
+                    <span className="font-mono font-bold text-ac">{pct}%</span>
+                  </div>
+                  <div className="w-full h-2 bg-sf2 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-ac2 to-ac rounded-full transition-all duration-500"
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                  <div className="flex gap-2 mt-3">
+                    <ActionBtn color="gn" disabled={episodePhase !== 'recording'} onClick={store.doSaveEpisode}>
+                      {episodePhase === 'saving' ? t('episodeSaving') : t('saveEpisode')}
+                    </ActionBtn>
+                    <ActionBtn color="yl" disabled={episodePhase !== 'recording'} onClick={store.doDiscardEpisode}>
+                      {t('discardEpisode')}
+                    </ActionBtn>
+                    {episodePhase === 'resetting' && (
+                      <ActionBtn color="ac" onClick={store.doSkipReset}>
+                        {t('skipReset')}
+                      </ActionBtn>
+                    )}
+                  </div>
+                  <div className="mt-2 flex items-center gap-2 text-xs font-medium">
+                    {(episodePhase === 'recording' || !episodePhase) && (
+                      <><span className="w-2 h-2 rounded-full bg-ac animate-pulse" /><span className="text-ac">{t('stateRecording')}</span></>
+                    )}
+                    {episodePhase === 'saving' && (
+                      <><span className="w-2 h-2 rounded-full bg-yl animate-pulse" /><span className="text-yl">{t('episodeSaving')}</span></>
+                    )}
+                    {episodePhase === 'resetting' && (
+                      <><span className="w-2 h-2 rounded-full bg-yl animate-pulse" /><span className="text-yl">{t('episodeResetting')}</span></>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Bottom: live monitoring */}
+          <div className="grid grid-cols-2 gap-3 px-4 py-2 flex-1 min-h-[240px] max-[900px]:grid-cols-1">
+            {camerasExist ? (
+              <CameraPreviewPanel cameras={hwStatus!.cameras} busy={session.state !== 'idle'} />
+            ) : (
+              <div className="bg-sf rounded-lg p-4 shadow-card flex items-center justify-center text-sm text-tx3">
+                {t('noCameraFeed')}
+              </div>
             )}
+            <ServoPanel state={state} />
           </div>
         </div>
 
         {/* Right sidebar */}
-        <div className="bg-sf/60 border-l border-bd/40 flex flex-col overflow-hidden max-[900px]:border-l-0 max-[900px]:border-t max-[900px]:max-h-[50vh]">
+        <div className="bg-sf border-l border-bd/50 flex flex-col overflow-hidden max-[900px]:border-l-0 max-[900px]:border-t max-[900px]:max-h-[50vh]">
           <div className="px-3 py-2.5 border-b border-bd/40">
             <div className="flex items-center justify-between">
-              <h3 className="text-xs text-tx2 uppercase tracking-wider font-medium">{t('datasets')}</h3>
+              <h3 className="text-2xs text-tx3 font-mono uppercase tracking-widest">{t('datasets')}</h3>
               <button
                 onClick={store.loadDatasets}
-                className="px-2.5 py-0.5 border border-ac/60 text-ac rounded text-xs hover:border-ac hover:bg-ac/10"
+                className="px-2.5 py-0.5 bg-ac/10 text-ac rounded text-xs font-medium hover:bg-ac/20 transition-colors"
               >
                 {t('refresh')}
               </button>
@@ -278,23 +301,23 @@ export default function DashboardView() {
           </div>
           <div className="overflow-y-auto flex-1 p-2">
             {datasets.length === 0 && (
-              <div className="text-tx2 text-center py-4 text-sm">{t('noDatasets')}</div>
+              <div className="text-tx3 text-center py-6 text-sm">{t('noDatasets')}</div>
             )}
             {datasets.map((d) => (
               <div
                 key={d.name}
-                className="bg-white border border-bd/30 rounded-lg shadow-card mb-1.5 px-3 py-2 flex items-center gap-2 text-sm"
+                className="bg-bg border border-bd/30 rounded-lg mb-1.5 px-3 py-2 flex items-center gap-2 text-sm"
               >
-                <span className="flex-1 font-semibold text-tx">{d.name}</span>
-                <span className="text-tx2 text-xs whitespace-nowrap">
+                <span className="flex-1 font-semibold text-tx truncate">{d.name}</span>
+                <span className="text-tx3 text-2xs font-mono whitespace-nowrap">
                   {d.total_episodes != null ? `${d.total_episodes} ep` : ''}
-                  {d.total_frames != null ? ` | ${d.total_frames} fr` : ''}
+                  {d.total_frames != null ? ` · ${d.total_frames} fr` : ''}
                 </span>
                 <button
                   onClick={() => {
                     if (confirm(`${t('deleteConfirm')} "${d.name}"?`)) store.deleteDataset(d.name)
                   }}
-                  className="px-2 py-0.5 border border-rd/60 text-rd rounded text-xs hover:border-rd hover:bg-rd/10"
+                  className="px-2 py-0.5 text-rd/60 rounded text-xs hover:text-rd hover:bg-rd/10 transition-colors"
                 >
                   {t('del')}
                 </button>
@@ -304,10 +327,10 @@ export default function DashboardView() {
 
           <div className="px-3 py-2.5 border-t border-bd/40">
             <div className="flex items-center justify-between">
-              <h3 className="text-xs text-tx2 uppercase tracking-wider font-medium">{t('log')}</h3>
+              <h3 className="text-2xs text-tx3 font-mono uppercase tracking-widest">{t('log')}</h3>
               <button
                 onClick={store.clearLog}
-                className="px-2.5 py-0.5 border border-bd text-tx2 rounded-sm text-xs hover:bg-bd/30"
+                className="px-2.5 py-0.5 text-tx3 rounded-sm text-xs hover:text-tx2 hover:bg-bd/30 transition-colors"
               >
                 {t('clear')}
               </button>
@@ -317,11 +340,11 @@ export default function DashboardView() {
             {logs.map((entry, i) => (
               <div
                 key={i}
-                className={`py-0.5 border-b border-bd/40 ${
-                  entry.cls === 'err' ? 'text-rd' : entry.cls === 'ok' ? 'text-gn' : 'text-tx2'
+                className={`py-0.5 border-b border-bd/20 ${
+                  entry.cls === 'err' ? 'text-rd' : entry.cls === 'ok' ? 'text-gn' : 'text-tx3'
                 }`}
               >
-                <span className="text-tx3 mr-2 text-2xs">{entry.time}</span>
+                <span className="text-tx3/60 mr-2 text-2xs">{entry.time}</span>
                 {entry.message}
               </div>
             ))}
@@ -329,80 +352,5 @@ export default function DashboardView() {
         </div>
       </div>
     </div>
-  )
-}
-
-function RecordingProgress({
-  episodePhase,
-  savedEpisodes,
-  targetEpisodes,
-  onSave,
-  onDiscard,
-  onSkipReset,
-  t,
-}: {
-  episodePhase: string
-  savedEpisodes: number
-  targetEpisodes: number
-  onSave: () => void
-  onDiscard: () => void
-  onSkipReset: () => void
-  t: (key: any) => string
-}) {
-  return (
-    <>
-      <div className="mb-3">
-        <div className="flex justify-between text-sm text-tx mb-1">
-          <span>{t('savedEpisodes')}: {savedEpisodes} / {targetEpisodes}</span>
-          <span>{targetEpisodes > 0 ? Math.round((savedEpisodes / targetEpisodes) * 100) : 0}%</span>
-        </div>
-        <div className="w-full h-2.5 bg-bd rounded-full overflow-hidden">
-          <div
-            className="h-full bg-gradient-to-r from-ac2 to-ac rounded-full transition-all duration-500"
-            style={{ width: `${targetEpisodes > 0 ? (savedEpisodes / targetEpisodes) * 100 : 0}%` }}
-          />
-        </div>
-      </div>
-
-      <div className="flex gap-2 flex-wrap mb-3">
-        <Btn variant="gn" disabled={episodePhase !== 'recording'} onClick={onSave}>
-          {episodePhase === 'saving' ? t('episodeSaving') : t('saveEpisode')}
-        </Btn>
-        <Btn variant="yl" disabled={episodePhase !== 'recording'} onClick={onDiscard}>
-          {t('discardEpisode')}
-        </Btn>
-        {episodePhase === 'resetting' && (
-          <Btn variant="ac" onClick={onSkipReset}>
-            {t('skipReset')}
-          </Btn>
-        )}
-      </div>
-      <div className="flex items-center gap-2 text-sm">
-        {episodePhase === 'recording' && (
-          <>
-            <span className="w-2 h-2 rounded-full bg-ac animate-pulse" />
-            <span className="text-ac">{t('stateRecording')}</span>
-          </>
-        )}
-        {episodePhase === 'saving' && (
-          <>
-            <span className="w-2 h-2 rounded-full bg-yl animate-pulse" />
-            <span className="text-yl">{t('episodeSaving')}</span>
-          </>
-        )}
-        {episodePhase === 'resetting' && (
-          <>
-            <span className="w-2 h-2 rounded-full bg-yl animate-pulse" />
-            <span className="text-yl">{t('episodeResetting')}</span>
-          </>
-        )}
-        {!episodePhase && (
-          <>
-            <span className="w-2 h-2 rounded-full bg-ac animate-pulse" />
-            <span className="text-ac">{t('stateRecording')}</span>
-          </>
-        )}
-      </div>
-    </>
   )
 }

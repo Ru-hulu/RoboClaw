@@ -23,13 +23,13 @@ export function CameraPreviewPanel({ cameras, busy }: { cameras: any[]; busy: bo
   }, [busy, capturing, cameras])
 
   return (
-    <div className="bg-white border border-bd/30 rounded-lg p-5 shadow-card">
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="text-xs text-tx2 uppercase tracking-wider font-medium">{t('cameras')}</h3>
+    <div className="bg-sf rounded-lg p-4 shadow-card">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-2xs text-tx3 font-mono uppercase tracking-widest">{t('cameras')}</h3>
         <button
           onClick={capture}
           disabled={busy || capturing}
-          className="px-2.5 py-0.5 border border-ac/60 text-ac rounded text-xs hover:border-ac hover:bg-ac/10 disabled:opacity-30"
+          className="px-2.5 py-0.5 bg-ac/10 text-ac rounded text-xs font-medium hover:bg-ac/20 transition-colors disabled:opacity-30"
         >
           {capturing ? '...' : t('refresh')}
         </button>
@@ -37,17 +37,17 @@ export function CameraPreviewPanel({ cameras, busy }: { cameras: any[]; busy: bo
       {Object.keys(previews).length > 0 ? (
         <div className="flex flex-wrap gap-2">
           {cameras.filter((c: any) => c.connected).map((_: any, i: number) => (
-            <div key={i} className="flex-1 min-w-[200px] max-w-[400px] relative bg-white rounded-lg overflow-hidden border border-bd/30 shadow-card">
+            <div key={i} className="flex-1 min-w-[180px] max-w-[360px] relative rounded-lg overflow-hidden border border-bd/30">
               <img
                 src={previews[i] || ''}
                 alt={`Camera ${i}`}
-                className="w-full aspect-video object-contain bg-black"
+                className="w-full aspect-video object-contain bg-tx/5"
               />
             </div>
           ))}
         </div>
       ) : (
-        <div className="text-sm text-tx2">{t('noCameraFeed')}</div>
+        <div className="text-sm text-tx3">{t('noCameraFeed')}</div>
       )}
     </div>
   )

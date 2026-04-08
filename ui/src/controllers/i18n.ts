@@ -42,7 +42,7 @@ const translations = {
 
     // Settings
     settingsTitle: '设置',
-    settingsDesc: '这里只保留整个 RoboClaw 实例级别的全局 provider 配置。填写 base URL 和 API key 后，新的对话请求会直接使用这份配置。',
+    settingsDesc: '管理硬件设备和 AI 服务商配置。',
     globalProvider: 'Global Provider',
     baseUrl: 'Base URL',
     apiKey: 'API Key',
@@ -119,6 +119,8 @@ const translations = {
     addDevice: '添加设备',
     calibrate: '校准',
     warnings: '个警告',
+    epTime: '时长 (s)',
+    resetTime: '重置 (s)',
 
     // Setup Wizard
     setup: '硬件设置',
@@ -190,7 +192,7 @@ const translations = {
 
     // Settings
     settingsTitle: 'Settings',
-    settingsDesc: 'Global provider configuration for this RoboClaw instance. Fill in the base URL and API key, and new chat requests will use this configuration.',
+    settingsDesc: 'Manage hardware devices and AI provider configuration.',
     globalProvider: 'Global Provider',
     baseUrl: 'Base URL',
     apiKey: 'API Key',
@@ -267,6 +269,8 @@ const translations = {
     addDevice: 'Add Device',
     calibrate: 'Calibrate',
     warnings: 'warnings',
+    epTime: 'Time (s)',
+    resetTime: 'Reset (s)',
 
     // Setup Wizard
     setup: 'Setup',
