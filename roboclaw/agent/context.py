@@ -106,22 +106,13 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
         return ContextBuilder._RUNTIME_CONTEXT_TAG + "\n" + "\n".join(lines)
 
     def _load_bootstrap_files(self) -> str:
-        """Load all bootstrap files, preferring template if newer than workspace copy."""
+        """Load all bootstrap files from workspace."""
         parts = []
-        template_dir = Path(__file__).resolve().parent.parent / "templates"
 
         for filename in self.BOOTSTRAP_FILES:
-            ws_path = self.workspace / filename
-            tpl_path = template_dir / filename
-
-            # Use template if it exists and is newer, auto-sync to workspace
-            if tpl_path.exists() and ws_path.exists():
-                if tpl_path.stat().st_mtime > ws_path.stat().st_mtime:
-                    import shutil
-                    shutil.copy2(tpl_path, ws_path)
-
-            if ws_path.exists():
-                content = ws_path.read_text(encoding="utf-8")
+            file_path = self.workspace / filename
+            if file_path.exists():
+                content = file_path.read_text(encoding="utf-8")
                 parts.append(f"## {filename}\n\n{content}")
 
         return "\n\n".join(parts) if parts else ""
