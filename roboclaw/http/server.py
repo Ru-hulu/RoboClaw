@@ -146,7 +146,11 @@ def _register_system_routes(app: FastAPI, runtime: WebRuntime) -> None:
 async def _handle_save_provider(payload: dict[str, Any], runtime: WebRuntime) -> dict[str, Any]:
     """Apply provider config changes, swap provider atomically, refresh agent."""
     config = load_config(get_config_path())
-    section = config.providers.custom
+
+    provider_name = payload.get("provider", "custom")
+    section = getattr(config.providers, provider_name, None)
+    if section is None:
+        return {"status": "error", "message": f"Unknown provider: {provider_name}"}
 
     if payload.get("clear_api_key"):
         section.api_key = ""
@@ -163,10 +167,13 @@ async def _handle_save_provider(payload: dict[str, Any], runtime: WebRuntime) ->
     if error:
         return error
 
-    discovered_model = await _discover_custom_model(section.api_base or "", section.api_key or None)
-    if discovered_model:
-        config.agents.defaults.model = discovered_model
-    config.agents.defaults.provider = "custom" if section.api_base else "auto"
+    # Auto-discover model for providers that use a custom base URL
+    if section.api_base:
+        discovered_model = await _discover_custom_model(section.api_base, section.api_key or None)
+        if discovered_model:
+            config.agents.defaults.model = discovered_model
+
+    config.agents.defaults.provider = provider_name if provider_name != "auto" else "auto"
 
     save_config(config, get_config_path())
 
