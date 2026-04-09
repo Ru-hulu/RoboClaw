@@ -383,7 +383,7 @@ class SetupSession:
                 t("selectEmbodimentType", lang) + ":",
                 options=[
                     t("arm", lang),
-                    t("hand", lang),
+                    t("handSoon", lang),
                     t("humanoidSoon", lang),
                     t("mobileSoon", lang),
                 ],

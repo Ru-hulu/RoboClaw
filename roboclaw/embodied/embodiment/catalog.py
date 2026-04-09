@@ -26,9 +26,7 @@ def models_for(category: EmbodimentCategory) -> list[Any]:
     if category == EmbodimentCategory.ARM:
         from roboclaw.embodied.embodiment.arm.registry import _PROBES
         return [DeviceInfo(name=name, roles=("follower", "leader")) for name in _PROBES]
-    if category == EmbodimentCategory.HAND:
-        from roboclaw.embodied.embodiment.hand.registry import all_hand_specs
-        return list(all_hand_specs().values())
+    # HAND, HUMANOID, MOBILE — not yet supported in the setup wizard
     return []
 
 
