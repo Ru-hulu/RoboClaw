@@ -25,6 +25,7 @@ export interface Catalog {
 
 export interface ScannedPort {
   stable_id: string
+  label: string
   by_id: string
   by_path: string
   dev: string
@@ -35,6 +36,7 @@ export interface ScannedPort {
 
 export interface ScannedCamera {
   stable_id: string
+  label: string
   index: number
   by_path: string
   by_id: string
@@ -70,9 +72,8 @@ export interface ConfiguredHand {
 
 export type WizardStep = 'select' | 'scan' | 'identify' | 'review'
 
-export function deviceLabel(device: { label?: string; by_id: string; dev: string }): string {
-  if (device.label) return device.label
-  return device.by_id ? device.by_id.split('/').pop() || device.dev : device.dev
+export function deviceLabel(device: { label?: string; dev?: string }): string {
+  return device.label || device.dev || '?'
 }
 
 interface SetupStore {
@@ -195,6 +196,7 @@ export const useSetup = create<SetupStore>((set, get) => ({
       const data = await postJson(`${SETUP}/scan`, { model })
       const ports: ScannedPort[] = (data.ports || []).map((p: any) => ({
         stable_id: p.stable_id || p.by_id || p.dev || '',
+        label: p.label || p.dev || '?',
         by_id: p.by_id || '',
         by_path: p.by_path || '',
         dev: p.dev || '',
@@ -204,6 +206,7 @@ export const useSetup = create<SetupStore>((set, get) => ({
       }))
       const cameras: ScannedCamera[] = (data.cameras || []).map((c: any, i: number) => ({
         stable_id: c.stable_id || c.by_path || c.by_id || c.dev || '',
+        label: c.label || c.dev || '?',
         index: i,
         by_path: c.by_path || '',
         by_id: c.by_id || '',
