@@ -56,15 +56,43 @@ def _get_spec(arm_type: str) -> dict[str, Any]:
 
 
 class CalibrationOutputConsumer(OutputConsumer):
-    """Parse lerobot-calibrate subprocess stdout → Board state updates."""
+    """Parse lerobot-calibrate subprocess stdout → Board state updates.
+
+    Reads chunks instead of lines because input() prompts don't end
+    with newlines, which would block the line-based StreamReader.
+    """
 
     def __init__(self, board: Any, stdout: Any) -> None:
         super().__init__(board, stdout)
         self._positions: dict[str, dict[str, int]] = {}
+        self._buffer = ""
 
-    async def parse_line(self, line: str) -> None:
-        # Hot path: position table rows are the most frequent output
-        m = _RE_POSITION_ROW.search(line)
+    async def _run(self) -> None:
+        """Read stdout in chunks, split into lines + partial prompts."""
+        try:
+            while True:
+                chunk = await self._stdout.read(4096)
+                if not chunk:
+                    break
+                self._buffer += chunk.decode("utf-8", errors="replace")
+                await self._process_buffer()
+        except (OSError, ConnectionError):
+            pass
+
+    async def _process_buffer(self) -> None:
+        """Process complete lines and detect input() prompts (no trailing newline)."""
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            line = line.strip()
+            if line:
+                self.board.log(line)
+                await self._parse(line)
+        # Check if remaining buffer contains an input() prompt (no newline)
+        if self._buffer and (":" in self._buffer or "..." in self._buffer):
+            await self._parse(self._buffer)
+
+    async def _parse(self, text: str) -> None:
+        m = _RE_POSITION_ROW.search(text)
         if m:
             name = m.group(1)
             new_val = {"min": int(m.group(2)), "pos": int(m.group(3)), "max": int(m.group(4))}
@@ -73,7 +101,7 @@ class CalibrationOutputConsumer(OutputConsumer):
                 await self.board.update(calibration_positions=dict(self._positions))
             return
 
-        low = line.lower()
+        low = text.lower()
         if "press enter to use provided calibration" in low:
             await self.board.update(state=SessionState.CALIBRATING, calibration_step="choose")
         elif "running calibration" in low:
