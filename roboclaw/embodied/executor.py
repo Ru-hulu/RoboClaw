@@ -72,22 +72,12 @@ class SubprocessExecutor:
         )
 
     async def run_interactive(self, argv: list[str]) -> tuple[int, str]:
-        """Run command with inherited TTY, tee stderr. Returns (exit code, stderr text)."""
+        """Run command with fully inherited TTY. Returns (exit code, stderr text)."""
         process = await asyncio.create_subprocess_exec(
-            *argv, stderr=asyncio.subprocess.PIPE, env=_utf8_env(),
+            *argv, env=_utf8_env(),
         )
-        chunks: list[bytes] = []
-
-        async def _tee_stderr() -> None:
-            assert process.stderr is not None
-            async for chunk in process.stderr:
-                sys.stderr.buffer.write(chunk)
-                sys.stderr.buffer.flush()
-                chunks.append(chunk)
-
-        await asyncio.gather(_tee_stderr(), process.wait())
-        stderr_text = b"".join(chunks).decode("utf-8", errors="replace")
-        return process.returncode or 0, stderr_text
+        await process.wait()
+        return process.returncode or 0, ""
 
     async def run_detached(self, argv: list[str], log_dir: Path) -> str:
         """Run command in background, return job_id (uuid). Save pid and log path."""
