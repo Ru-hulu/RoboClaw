@@ -46,6 +46,8 @@ export interface SessionStatus {
   calibration_step: string
   calibration_arm: string
   calibration_positions: Record<string, { min: number; pos: number; max: number }> | null
+  // Cross-process embodiment owner (e.g. "teleop", "recording")
+  embodiment_owner: string
 }
 
 export interface Fault {
@@ -185,6 +187,7 @@ const defaultSession: SessionStatus = {
   calibration_step: '',
   calibration_arm: '',
   calibration_positions: null,
+  embodiment_owner: '',
 }
 
 // ---------------------------------------------------------------------------
@@ -400,6 +403,7 @@ export const useDashboard = create<DashboardStore>((set, get) => ({
           calibration_step: event.calibration_step || '',
           calibration_arm: event.calibration_arm || '',
           calibration_positions: event.calibration_positions || null,
+          embodiment_owner: event.embodiment_owner || '',
         },
       })
       return

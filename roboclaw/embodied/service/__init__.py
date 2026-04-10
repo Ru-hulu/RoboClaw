@@ -113,6 +113,7 @@ class EmbodiedService:
                 raise EmbodimentBusyError(f"Embodiment busy: {reason}")
             self._file_lock.acquire_exclusive(owner)  # cross-process
             self._embodiment_owner = owner
+            self.board.set_field("embodiment_owner", owner)
 
     def release_embodiment(self, owner: str = "") -> None:
         with self._lock:
@@ -120,11 +121,16 @@ class EmbodiedService:
                 return
             self._file_lock.release_exclusive()  # cross-process
             self._embodiment_owner = ""
+            self.board.set_field("embodiment_owner", "")
 
     # -- Status --
 
     def get_status(self) -> dict[str, Any]:
-        return self.board.state
+        status = self.board.state
+        # Merge cross-process owner info for REST callers
+        if not status.get("embodiment_owner"):
+            status["embodiment_owner"] = self._embodiment_owner or self._file_lock.owner()
+        return status
 
     # -- Operations (Web entry points) --
 

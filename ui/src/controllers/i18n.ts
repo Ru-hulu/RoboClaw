@@ -26,10 +26,15 @@ const translations = {
   zh: {
     ...shared.zh,
 
-    // Header
+    // Header / Navigation
+    controlCenter: '控制中心',
+    dataCenter: '数据中心',
+    settings: '设置',
+    logs: '日志',
+    assistantChat: '助手对话',
+    // Legacy (kept for any remaining references)
     chat: '对话',
     dataCollection: '数据采集',
-    settings: '设置',
 
     // Chat
     startChat: '开始与 RoboClaw 对话',
@@ -80,6 +85,7 @@ const translations = {
     datasets: '数据集',
     refresh: '刷新',
     noDatasets: '暂无数据集',
+    noLogs: '暂无日志',
     log: '日志',
     clear: '清除',
     noCameraFeed: '无相机画面',
@@ -121,6 +127,12 @@ const translations = {
     stateConnected: '已连接',
     stateTeleoperating: '遥操作中',
     stateRecording: '录制中',
+
+    // Embodiment status
+    embodimentIdle: '空闲',
+    embodimentBusy: '本体占用中',
+    embodimentSource: '来源',
+    dataQualityPlaceholder: '数据质量分析（即将推出）',
 
     // Hardware
     hwReady: '硬件就绪',
@@ -222,10 +234,14 @@ const translations = {
   en: {
     ...shared.en,
 
-    // Header
+    // Header / Navigation
+    controlCenter: 'Control Center',
+    dataCenter: 'Data Center',
+    settings: 'Settings',
+    logs: 'Logs',
+    assistantChat: 'AI Assistant',
     chat: 'Chat',
     dataCollection: 'Data Collection',
-    settings: 'Settings',
 
     // Chat
     startChat: 'Start chatting with RoboClaw',
@@ -276,6 +292,7 @@ const translations = {
     datasets: 'Datasets',
     refresh: 'Refresh',
     noDatasets: 'No datasets',
+    noLogs: 'No logs yet',
     log: 'Log',
     clear: 'Clear',
     noCameraFeed: 'No camera feed',
@@ -317,6 +334,12 @@ const translations = {
     stateConnected: 'Connected',
     stateTeleoperating: 'Teleoperating',
     stateRecording: 'Recording',
+
+    // Embodiment status
+    embodimentIdle: 'Idle',
+    embodimentBusy: 'Embodiment busy',
+    embodimentSource: 'Source',
+    dataQualityPlaceholder: 'Data Quality Analysis (coming soon)',
 
     // Hardware
     hwReady: 'Hardware Ready',

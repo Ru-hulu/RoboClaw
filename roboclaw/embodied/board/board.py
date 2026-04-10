@@ -31,6 +31,7 @@ IDLE_STATE: dict[str, Any] = {
     "dataset": None,
     "rerun_web_port": 0,
     "error": "",
+    "embodiment_owner": "",
 }
 
 Subscriber = Callable[[str, dict[str, Any]], Awaitable[None] | None]
@@ -134,6 +135,11 @@ class Board:
             self._state = dict(IDLE_STATE)
             self._commands.clear()
             self._start_time = 0.0
+
+    def set_field(self, key: str, value: Any) -> None:
+        """Set a single state field without emitting. Thread-safe."""
+        with self._lock:
+            self._state[key] = value
 
     def get(self, key: str, default: Any = None) -> Any:
         """Read a single state field without full snapshot copy."""

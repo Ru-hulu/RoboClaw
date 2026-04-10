@@ -15,9 +15,11 @@ export default function Header() {
   }, [fetchNetworkInfo])
 
   const navItems = [
-    { path: '/dashboard', label: t('dataCollection') },
-    { path: '/chat', label: t('chat') },
+    { path: '/control', label: t('controlCenter') },
+    { path: '/data', label: t('dataCenter') },
     { path: '/settings', label: t('settings') },
+    { path: '/logs', label: t('logs') },
+    { path: '/chat', label: t('assistantChat') },
   ]
 
   return (
@@ -34,7 +36,7 @@ export default function Header() {
           <Link
             key={item.path}
             to={item.path}
-            className={`px-3 py-1 text-sm rounded-md transition-all ${
+            className={`px-2.5 py-1 text-sm rounded-md transition-all ${
               location.pathname === item.path
                 ? 'text-ac font-semibold bg-ac/10'
                 : 'text-tx2 hover:text-tx hover:bg-bd/30'

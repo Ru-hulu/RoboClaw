@@ -61,8 +61,9 @@ class Session:
     ) -> None:
         """Start subprocess and wire consumers."""
         self._stopped = False
+        owner = self.board.get("embodiment_owner", "")
         self.board.reset()
-        await self.board.update(state=initial_state)
+        await self.board.update(state=initial_state, embodiment_owner=owner)
 
         # Launch interactive subprocess (stdin piped, stderr merged into stdout)
         self._process = await self._runner.run_streaming_interactive(argv)
