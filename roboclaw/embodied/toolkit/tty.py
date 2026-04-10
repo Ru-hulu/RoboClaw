@@ -58,7 +58,6 @@ class TtySession:
 
         await self._tty_handoff(start=True, label=spec.label)
         try:
-            await session.start()
             with raw_terminal():
                 while not session.is_done():
                     key = read_key_nonblocking()

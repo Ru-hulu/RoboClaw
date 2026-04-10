@@ -54,11 +54,9 @@ class ReplaySession(Session):
                 from roboclaw.embodied.toolkit.tty import TtySession
 
                 return await TtySession(tty_handoff).run(self)
-            # Web path: just wait for completion
             return "Replay started."
-        except Exception:
+        finally:
             self._parent.release_embodiment()
-            raise
 
     def _replay_kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -66,6 +64,11 @@ class ReplaySession(Session):
             for k, v in kwargs.items()
             if k in ("dataset_name", "episode", "fps", "arms")
         }
+
+    async def _wait_process(self) -> None:
+        """Release embodiment lock on natural subprocess exit (web path)."""
+        await super()._wait_process()
+        self._parent.release_embodiment()
 
     # -- CLI protocol ------------------------------------------------------
 
@@ -85,10 +88,8 @@ class ReplaySession(Session):
     async def on_key(self, key: str) -> None:
         if key in ("ctrl_c", "esc"):
             await self.stop()
-            self._parent.release_embodiment()
 
     def result(self) -> str:
-        self._parent.release_embodiment("replaying")
         s = self.board.state
         if s.get("error"):
             return f"Replay failed: {s['error']}"

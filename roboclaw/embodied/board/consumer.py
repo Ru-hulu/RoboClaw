@@ -37,22 +37,61 @@ class OutputConsumer(Consumer):
     """Reads subprocess stdout, parses lines, updates Board.
 
     Subclasses override parse_line() for operation-specific parsing.
+
+    Uses chunked reads with a timeout so that prompts from ``input()``
+    (which do **not** end with ``\\n``) are still processed promptly
+    instead of being stuck in the StreamReader buffer forever.
     """
+
+    _PARTIAL_LINE_TIMEOUT: float = 0.5
 
     def __init__(self, board: Board, stdout: asyncio.StreamReader) -> None:
         super().__init__(board)
         self._stdout = stdout
 
     async def _run(self) -> None:
+        buf = b""
         try:
-            async for raw in self._stdout:
-                line = raw.decode("utf-8", errors="replace").rstrip("\n")
-                if not line:
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(
+                        self._stdout.read(4096),
+                        timeout=self._PARTIAL_LINE_TIMEOUT,
+                    )
+                    if not chunk:
+                        # EOF — flush remaining buffer
+                        for line in self._extract_lines(buf):
+                            await self._dispatch(line)
+                        break
+                    buf += chunk
+                except asyncio.TimeoutError:
+                    # No new data — flush any partial (non-newline-terminated) line
+                    if buf:
+                        for line in self._extract_lines(buf):
+                            await self._dispatch(line)
+                        buf = b""
                     continue
-                self.board.log(line)
-                await self.parse_line(line)
+
+                # Eagerly process all complete lines; keep the trailing fragment
+                while b"\n" in buf:
+                    raw_line, buf = buf.split(b"\n", 1)
+                    line = raw_line.decode("utf-8", errors="replace").rstrip("\r")
+                    if line:
+                        await self._dispatch(line)
         except (OSError, ConnectionError):
             pass
+
+    # -- helpers --
+
+    @staticmethod
+    def _extract_lines(buf: bytes) -> list[str]:
+        """Decode buffer into non-empty lines (splitting on \\n and \\r)."""
+        text = buf.decode("utf-8", errors="replace")
+        return [line for line in text.splitlines() if line.strip()]
+
+    async def _dispatch(self, line: str) -> None:
+        self.board.log(line)
+        await self.parse_line(line)
 
     async def parse_line(self, line: str) -> None:
         """Override in subclasses for operation-specific parsing."""

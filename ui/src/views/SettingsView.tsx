@@ -43,11 +43,20 @@ export default function SettingsView() {
   const { wizardActive, startWizard, loadDevices, loadCatalog } = useSetup()
   const { fetchHardwareStatus } = useDashboard()
 
+  const sessionState = useDashboard((s) => s.session.state)
+  const sessionCalArm = useDashboard((s) => s.session.calibration_arm)
   const [calibratingArm, setCalibratingArm] = useState<string | null>(null)
   const [providerLoading, setProviderLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+
+  // Restore calibration panel after page refresh
+  useEffect(() => {
+    if (sessionState === 'calibrating' && sessionCalArm && !calibratingArm) {
+      setCalibratingArm(sessionCalArm)
+    }
+  }, [sessionState, sessionCalArm])
 
   // Provider state
   const [providers, setProviders] = useState<ProviderOption[]>([])

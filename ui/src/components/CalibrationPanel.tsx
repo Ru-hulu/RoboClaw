@@ -40,6 +40,13 @@ export function CalibrationPanel({ armAlias, onClose }: { armAlias: string; onCl
         </button>
       </div>
 
+      {!step && isCalibrating && (
+        <p className="text-sm text-tx2 flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-ac animate-pulse" />
+          {t('calStarting')}
+        </p>
+      )}
+
       {step === 'choose' && (
         <div className="space-y-2">
           <p className="text-sm text-tx2">{t('calChoosePrompt')}</p>
@@ -75,7 +82,7 @@ export function CalibrationPanel({ armAlias, onClose }: { armAlias: string; onCl
 
       {step === 'recording' && (
         <div className="space-y-2">
-          <p className="text-sm text-tx2">{t('calRecordingPrompt')}</p>
+          <p className="text-sm text-tx2">{t('calRangePrompt')}</p>
           {positions && Object.keys(positions).length > 0 && (
             <div className="rounded-lg bg-bg border border-bd/40 p-2 font-mono text-2xs">
               <div className="grid grid-cols-4 gap-1 text-tx3 mb-1">
@@ -94,7 +101,7 @@ export function CalibrationPanel({ armAlias, onClose }: { armAlias: string; onCl
           )}
           <button onClick={() => sendCommand('confirm')}
             className="px-3 py-1.5 text-sm bg-gn text-white rounded-lg font-medium hover:bg-gn/90">
-            {t('calStopRecording')}
+            {t('calFinish')}
           </button>
         </div>
       )}

@@ -13,6 +13,7 @@ from roboclaw.embodied.embodiment.hardware.monitor import (
     ArmStatus, CameraStatus, HardwareMonitor,
     check_arm_status, check_camera_status,
 )
+from roboclaw.embodied.embodiment.lock import EmbodimentBusyError, EmbodimentFileLock
 from roboclaw.embodied.embodiment.manifest import Manifest
 from roboclaw.embodied.embodiment.manifest.binding import Binding
 from roboclaw.embodied.service.session import (
@@ -22,10 +23,6 @@ from roboclaw.embodied.service.session import (
 from roboclaw.embodied.service.session.calibrate import CalibrationSession
 from roboclaw.embodied.embodiment.doctor import DoctorService
 from roboclaw.embodied.service.session.setup import SetupSession
-
-
-class EmbodimentBusyError(RuntimeError):
-    """Raised when the embodiment lock cannot be acquired."""
 
 
 def _compute_readiness(
@@ -73,6 +70,7 @@ class EmbodiedService:
         self.manifest = manifest or Manifest(board=self.board)
         self.manifest.ensure()
         self._lock = threading.Lock()
+        self._file_lock = EmbodimentFileLock()
         self._embodiment_owner: str = ""
         self._active_session: Session | None = None
         self._recording_started = False
@@ -113,12 +111,14 @@ class EmbodiedService:
             if active or self._embodiment_owner:
                 reason = self.board.state.get("state", "") if active else self._embodiment_owner
                 raise EmbodimentBusyError(f"Embodiment busy: {reason}")
+            self._file_lock.acquire_exclusive(owner)  # cross-process
             self._embodiment_owner = owner
 
     def release_embodiment(self, owner: str = "") -> None:
         with self._lock:
             if owner and self._embodiment_owner != owner:
                 return
+            self._file_lock.release_exclusive()  # cross-process
             self._embodiment_owner = ""
 
     # -- Status --
@@ -129,6 +129,7 @@ class EmbodiedService:
     # -- Operations (Web entry points) --
 
     async def start_teleop(self, *, fps: int = 30) -> None:
+        self.acquire_embodiment("teleop")
         argv = CommandBuilder.teleop(self.manifest, fps=fps)
         self._active_session = self.teleop
         await self.teleop.start(argv)
@@ -149,6 +150,7 @@ class EmbodiedService:
             episode_time_s=episode_time_s,
             reset_time_s=reset_time_s,
         )
+        self.acquire_embodiment("recording")
         await self.board.update(target_episodes=num_episodes, dataset=dataset_name)
         self._active_session = self.record
         await self.record.start(argv)
@@ -167,6 +169,7 @@ class EmbodiedService:
         argv = CommandBuilder.replay(
             self.manifest, dataset_name=dataset_name, episode=episode, fps=fps,
         )
+        self.acquire_embodiment("replaying")
         self._active_session = self.replay
         await self.replay.start(argv, initial_state=SessionState.REPLAYING)
 
@@ -187,12 +190,14 @@ class EmbodiedService:
             task=task,
             num_episodes=num_episodes,
         )
+        self.acquire_embodiment("inferring")
         self._active_session = self.infer
         await self.infer.start(argv, initial_state=SessionState.INFERRING)
 
     async def stop(self) -> None:
         if self._active_session:
             await self._active_session.stop()
+            self.release_embodiment()
             if self._recording_started:
                 self._recording_started = False
                 if self._monitor is not None:
@@ -224,6 +229,11 @@ class EmbodiedService:
             self.release_embodiment()
             raise
         return {"state": "calibrating", "arm_alias": arm_alias}
+
+    async def stop_calibration(self) -> None:
+        """Properly terminate calibration subprocess (ESC → SIGINT → kill)."""
+        await self.calibration.stop()
+        self.release_embodiment()
 
     def post_calibration_command(self, command: str) -> None:
         """Forward a calibration command to the Board."""
@@ -307,10 +317,13 @@ class EmbodiedService:
         }
 
     def read_servo_positions(self) -> dict[str, Any]:
-        if self.busy:
+        if not self._file_lock.try_shared():
             return {"error": "busy", "arms": {}}
-        from roboclaw.embodied.embodiment.hardware.motors import read_servo_positions
-        return read_servo_positions(self.manifest.arms)
+        try:
+            from roboclaw.embodied.embodiment.hardware.motors import read_servo_positions
+            return read_servo_positions(self.manifest.arms)
+        finally:
+            self._file_lock.release_shared()
 
     # -- Shutdown --
 
@@ -321,3 +334,4 @@ class EmbodiedService:
             self.setup.stop_motion_detection()
         if self._monitor is not None:
             self._monitor.set_recording_active(False)
+        self.release_embodiment()

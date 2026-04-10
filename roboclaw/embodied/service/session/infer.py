@@ -46,13 +46,22 @@ class InferSession(Session):
         kwargs: dict[str, Any],
         tty_handoff: Any,
     ) -> str:
-        argv = CommandBuilder.infer(manifest, **_filter_infer_kwargs(kwargs))
-        await self.start(argv, initial_state=SessionState.INFERRING)
-        if tty_handoff:
-            from roboclaw.embodied.toolkit.tty import TtySession
+        self._parent.acquire_embodiment("inferring")
+        try:
+            argv = CommandBuilder.infer(manifest, **_filter_infer_kwargs(kwargs))
+            await self.start(argv, initial_state=SessionState.INFERRING)
+            if tty_handoff:
+                from roboclaw.embodied.toolkit.tty import TtySession
 
-            return await TtySession(tty_handoff).run(self)
-        return "Inference started."
+                return await TtySession(tty_handoff).run(self)
+            return "Inference started."
+        finally:
+            self._parent.release_embodiment()
+
+    async def _wait_process(self) -> None:
+        """Release embodiment lock on natural subprocess exit (web path)."""
+        await super()._wait_process()
+        self._parent.release_embodiment()
 
     # ── CLI protocol ─────────────────────────────────────────────────────
 

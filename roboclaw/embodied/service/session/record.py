@@ -91,15 +91,19 @@ class RecordSession(Session):
             validate_dataset_name(dataset_name)
         self._kwargs = kwargs
         if tty_handoff:
-            argv, self._dataset_name = CommandBuilder.record(manifest, **self._record_kwargs(kwargs))
-            await self.board.update(
-                target_episodes=kwargs.get("num_episodes", 10),
-                dataset=self._dataset_name,
-            )
-            await self.start(argv)
-            from roboclaw.embodied.toolkit.tty import TtySession
+            self._parent.acquire_embodiment("recording")
+            try:
+                argv, self._dataset_name = CommandBuilder.record(manifest, **self._record_kwargs(kwargs))
+                await self.board.update(
+                    target_episodes=kwargs.get("num_episodes", 10),
+                    dataset=self._dataset_name,
+                )
+                await self.start(argv)
+                from roboclaw.embodied.toolkit.tty import TtySession
 
-            return await TtySession(tty_handoff).run(self)
+                return await TtySession(tty_handoff).run(self)
+            finally:
+                self._parent.release_embodiment()
         return "This action requires a local terminal."
 
     def _record_kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -110,6 +114,11 @@ class RecordSession(Session):
             if k in ("task", "dataset_name", "num_episodes", "fps",
                      "episode_time_s", "reset_time_s", "arms", "use_cameras")
         }
+
+    async def _wait_process(self) -> None:
+        """Release embodiment lock on natural subprocess exit (web path)."""
+        await super()._wait_process()
+        self._parent.release_embodiment()
 
     # -- CLI protocol ------------------------------------------------------
 

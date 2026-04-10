@@ -122,9 +122,10 @@ class CalibrationSession(Session):
         """Start calibration subprocess for a single arm."""
         self._arm = arm
         self._cal_manifest = manifest
-        await self.board.update(calibration_arm=arm.alias)
         argv = CommandBuilder.calibrate(arm)
         await self.start(argv, initial_state=SessionState.CALIBRATING, auto_confirm=False)
+        # Set after start() — start() calls board.reset() which would clear it
+        await self.board.update(calibration_arm=arm.alias)
 
     async def _wait_process(self) -> None:
         """Override to sync EEPROM and release embodiment lock on exit."""
@@ -206,18 +207,22 @@ class CalibrationSession(Session):
 
         from roboclaw.embodied.executor import SubprocessExecutor
 
-        runner = SubprocessExecutor()
-        results: list[str] = []
-        for arm in targets:
-            result = await self._calibrate_one_tty(arm, manifest, runner, tty_handoff)
-            if result == "interrupted":
-                return "interrupted"
-            results.append(result)
+        self._parent.acquire_embodiment("calibrating")
+        try:
+            runner = SubprocessExecutor()
+            results: list[str] = []
+            for arm in targets:
+                result = await self._calibrate_one_tty(arm, manifest, runner, tty_handoff)
+                if result == "interrupted":
+                    return "interrupted"
+                results.append(result)
 
-        manifest.reload()
-        ok = sum(1 for r in results if r.endswith(": OK"))
-        fail = len(results) - ok
-        return f"{ok} succeeded, {fail} failed.\n" + "\n".join(results)
+            manifest.reload()
+            ok = sum(1 for r in results if r.endswith(": OK"))
+            fail = len(results) - ok
+            return f"{ok} succeeded, {fail} failed.\n" + "\n".join(results)
+        finally:
+            self._parent.release_embodiment()
 
     async def _calibrate_one_tty(
         self,

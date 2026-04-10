@@ -27,5 +27,8 @@ def register_calibrate_routes(app: FastAPI, service: Any) -> None:
 
     @app.post("/api/calibration/command")
     async def calibration_command(body: CommandRequest) -> dict:
+        if body.command == "stop":
+            await service.stop_calibration()
+            return {"status": "ok", "command": "stop"}
         service.post_calibration_command(body.command)
         return {"status": "ok", "command": body.command}

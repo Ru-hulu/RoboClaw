@@ -49,12 +49,16 @@ class TeleopSession(Session):
     ) -> str:
         self._kwargs = kwargs
         if tty_handoff:
-            fps = kwargs.get("fps", 30)
-            argv = CommandBuilder.teleop(manifest, fps=fps)
-            await self.start(argv)
-            from roboclaw.embodied.toolkit.tty import TtySession
+            self._parent.acquire_embodiment("teleop")
+            try:
+                fps = kwargs.get("fps", 30)
+                argv = CommandBuilder.teleop(manifest, fps=fps)
+                await self.start(argv)
+                from roboclaw.embodied.toolkit.tty import TtySession
 
-            return await TtySession(tty_handoff).run(self)
+                return await TtySession(tty_handoff).run(self)
+            finally:
+                self._parent.release_embodiment()
         return "This action requires a local terminal."
 
     # -- CLI protocol ------------------------------------------------------
@@ -72,7 +76,12 @@ class TeleopSession(Session):
         if state == "preparing":
             return "  preparing..."
         elapsed = s.get("elapsed_seconds", 0)
-        return f"  teleoperating  | {elapsed:.0f}s"
+        return f"  teleoperating  | {elapsed:.0f}s  (press Ctrl+C or ESC to stop)"
+
+    async def _wait_process(self) -> None:
+        """Release embodiment lock on natural subprocess exit (web path)."""
+        await super()._wait_process()
+        self._parent.release_embodiment()
 
     async def on_key(self, key: str) -> None:
         if key in ("ctrl_c", "esc"):
@@ -86,5 +95,5 @@ class TeleopSession(Session):
         return "Teleoperation finished."
 
     async def stop(self) -> None:
-        if self._parent.busy:
+        if self.busy:
             await super().stop()
