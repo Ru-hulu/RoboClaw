@@ -21,7 +21,7 @@ class RecordOutputConsumer(OutputConsumer):
     """Parses lerobot record stdout for episode lifecycle."""
 
     async def parse_line(self, line: str) -> None:
-        if self.board.get("state") == SessionState.PREPARING:
+        if self.board.get("state") == SessionState.PREPARING and "Recording episode" in line:
             await self.board.update(state=SessionState.RECORDING)
 
         m = _RE_RECORDING_EP.search(line)

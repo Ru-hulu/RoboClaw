@@ -20,7 +20,7 @@ class TeleopOutputConsumer(OutputConsumer):
     async def parse_line(self, line: str) -> None:
         if self.board.get("state") != SessionState.PREPARING:
             return
-        if any(kw in line.lower() for kw in ("teleoperat", "connected", "started")):
+        if "Teleop loop time" in line:
             await self.board.update(state=SessionState.TELEOPERATING)
 
 

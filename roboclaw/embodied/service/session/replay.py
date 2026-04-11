@@ -20,7 +20,7 @@ class ReplayOutputConsumer(OutputConsumer):
     async def parse_line(self, line: str) -> None:
         if self.board.get("state") != SessionState.PREPARING:
             return
-        if any(kw in line.lower() for kw in ("replay", "connected", "episode")):
+        if "Replaying episode" in line:
             await self.board.update(state=SessionState.REPLAYING)
 
 
