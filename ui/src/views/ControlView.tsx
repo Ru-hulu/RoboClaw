@@ -385,9 +385,9 @@ export default function ControlView() {
                 focus:outline-none focus:border-ac"
             >
               <option value="">{t('selectDataset')}</option>
-              {datasets.map(d => (
+              {datasets.filter(d => d.total_episodes && d.total_episodes > 0).map(d => (
                 <option key={d.name} value={d.name}>
-                  {d.name} {d.total_episodes ? `(${d.total_episodes} ep)` : ''}
+                  {d.name} ({d.total_episodes} ep)
                 </option>
               ))}
             </select>
@@ -431,7 +431,7 @@ export default function ControlView() {
                 <select value={inferSourceDs} onChange={(e) => setInferSourceDs(e.target.value)}
                   className="bg-sf2 border border-bd text-tx px-2 py-1.5 rounded text-sm focus:outline-none focus:border-ac">
                   <option value="">--</option>
-                  {datasets.map(d => (
+                  {datasets.filter(d => d.total_episodes && d.total_episodes > 0).map(d => (
                     <option key={d.name} value={d.name}>{d.name}</option>
                   ))}
                 </select>
