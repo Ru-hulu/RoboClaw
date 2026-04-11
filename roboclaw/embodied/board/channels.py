@@ -6,6 +6,7 @@ CH_CALIBRATION = "calibration"
 CH_CONFIG = "config"
 CH_FAULT_DETECTED = "fault.detected"
 CH_FAULT_RESOLVED = "fault.resolved"
+CH_HUB = "hub"
 
 # Channel → WebSocket message type
 WS_TYPES: dict[str, str] = {
@@ -14,4 +15,5 @@ WS_TYPES: dict[str, str] = {
     CH_CONFIG: "dashboard.config.changed",
     CH_FAULT_DETECTED: "dashboard.fault.detected",
     CH_FAULT_RESOLVED: "dashboard.fault.resolved",
+    CH_HUB: "dashboard.hub.progress",
 }

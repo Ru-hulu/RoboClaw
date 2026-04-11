@@ -52,6 +52,15 @@ def dataset_path(manifest: Any, name: str, fallback: Path | None = None) -> Path
     return get_roboclaw_home() / "workspace" / "embodied" / "datasets" / "local" / name
 
 
+def policy_path(manifest: Any, name: str) -> Path:
+    """Resolve policy root path for a given policy name."""
+    root = manifest.snapshot.get("policies", {}).get("root", "")
+    if root:
+        return Path(root).expanduser() / name
+    from roboclaw.embodied.embodiment.manifest.helpers import get_roboclaw_home
+    return get_roboclaw_home() / "workspace" / "embodied" / "policies" / name
+
+
 def logs_dir() -> Path:
     """Return the embodied jobs log directory."""
     from roboclaw.embodied.embodiment.manifest.helpers import get_roboclaw_home

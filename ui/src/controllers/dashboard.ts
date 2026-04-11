@@ -156,6 +156,14 @@ interface DashboardStore {
   doInferStart: (params: { checkpoint_path?: string; source_dataset?: string; num_episodes?: number }) => Promise<void>
   doInferStop: () => Promise<void>
 
+  // Hub
+  hubLoading: string | null
+  hubProgress: { operation: string; progress_percent: number; total_bytes: number; done: boolean } | null
+  pushDataset: (name: string, repoId: string, token?: string) => Promise<void>
+  pullDataset: (repoId: string, name?: string, token?: string) => Promise<void>
+  pushPolicy: (name: string, repoId: string, token?: string) => Promise<void>
+  pullPolicy: (repoId: string, name?: string, token?: string) => Promise<void>
+
   // Events & logging
   handleDashboardEvent: (event: any) => void
   addLog: (message: string, cls?: 'info' | 'ok' | 'err') => void
@@ -172,6 +180,7 @@ const SYSTEM = '/api/system'
 const REPLAY = '/api/replay'
 const TRAIN = '/api/train'
 const INFER = '/api/infer'
+const HUB = '/api/hub'
 
 // ---------------------------------------------------------------------------
 // Default session state
@@ -212,6 +221,8 @@ export const useDashboard = create<DashboardStore>((set, get) => ({
   calibration: { ...defaultCalibration },
   trainJobMessage: '',
   policies: [],
+  hubLoading: null,
+  hubProgress: null,
 
   addLog: (message, cls = 'info') => {
     const time = new Date().toLocaleTimeString()
@@ -450,6 +461,18 @@ export const useDashboard = create<DashboardStore>((set, get) => ({
 
     if (type === 'dashboard.calibration.state_changed') {
       set({ calibration: { state: event.state || 'idle', arm_alias: event.arm_alias || '' } })
+      return
+    }
+
+    if (type === 'dashboard.hub.progress') {
+      set({
+        hubProgress: {
+          operation: event.operation ?? '',
+          progress_percent: event.progress_percent ?? 0,
+          total_bytes: event.total_bytes ?? 0,
+          done: !!event.done,
+        },
+      })
     }
   },
 
@@ -518,6 +541,62 @@ export const useDashboard = create<DashboardStore>((set, get) => ({
         set({ policies: [] })
       }
     } catch { /* ignore */ }
+  },
+
+  // -- Hub ----------------------------------------------------------------
+
+  pushDataset: async (name, repoId, token) => {
+    set({ hubLoading: 'pushDataset' })
+    get().addLog(`Pushing dataset "${name}" → ${repoId}...`)
+    try {
+      const data = await postJson(`${HUB}/datasets/push`, { name, repo_id: repoId, token: token || '' })
+      get().addLog(data.message || 'Dataset pushed', 'ok')
+    } catch (e: unknown) {
+      get().addLog(`Push dataset failed: ${(e as Error).message}`, 'err')
+    } finally {
+      set({ hubLoading: null })
+    }
+  },
+
+  pullDataset: async (repoId, name, token) => {
+    set({ hubLoading: 'pullDataset', hubProgress: null })
+    get().addLog(`Downloading dataset from ${repoId}...`)
+    try {
+      const data = await postJson(`${HUB}/datasets/pull`, { repo_id: repoId, name: name || '', token: token || '' })
+      get().addLog(data.message || 'Dataset downloaded', 'ok')
+      get().loadDatasets()
+    } catch (e: unknown) {
+      get().addLog(`Pull dataset failed: ${(e as Error).message}`, 'err')
+    } finally {
+      set({ hubLoading: null, hubProgress: null })
+    }
+  },
+
+  pushPolicy: async (name, repoId, token) => {
+    set({ hubLoading: 'pushPolicy' })
+    get().addLog(`Pushing policy "${name}" → ${repoId}...`)
+    try {
+      const data = await postJson(`${HUB}/policies/push`, { name, repo_id: repoId, token: token || '' })
+      get().addLog(data.message || 'Policy pushed', 'ok')
+    } catch (e: unknown) {
+      get().addLog(`Push policy failed: ${(e as Error).message}`, 'err')
+    } finally {
+      set({ hubLoading: null })
+    }
+  },
+
+  pullPolicy: async (repoId, name, token) => {
+    set({ hubLoading: 'pullPolicy', hubProgress: null })
+    get().addLog(`Downloading policy from ${repoId}...`)
+    try {
+      const data = await postJson(`${HUB}/policies/pull`, { repo_id: repoId, name: name || '', token: token || '' })
+      get().addLog(data.message || 'Policy downloaded', 'ok')
+      get().fetchTrainPolicies()
+    } catch (e: unknown) {
+      get().addLog(`Pull policy failed: ${(e as Error).message}`, 'err')
+    } finally {
+      set({ hubLoading: null, hubProgress: null })
+    }
   },
 
   // -- Inference ----------------------------------------------------------

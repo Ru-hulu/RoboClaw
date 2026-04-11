@@ -15,6 +15,7 @@ _RECORD_ACTIONS = ["record"]
 _REPLAY_ACTIONS = ["replay"]
 _TRAIN_ACTIONS = ["train", "job_status", "list_datasets", "list_policies"]
 _INFER_ACTIONS = ["run_policy"]
+_HUB_ACTIONS = ["push_dataset", "pull_dataset", "push_policy", "pull_policy"]
 _LANGUAGE_PROP = {"type": "string", "description": "User's language code (en, zh)."}
 
 _TOOL_GROUPS: dict[str, dict[str, Any]] = {
@@ -293,6 +294,39 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
             "additionalProperties": False,
         },
     },
+    "hub": {
+        "description": "Upload/download datasets and policies to/from HuggingFace Hub.",
+        "actions": _HUB_ACTIONS,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": _HUB_ACTIONS,
+                    "description": "The hub action to perform.",
+                },
+                "language": _LANGUAGE_PROP,
+                "repo_id": {
+                    "type": "string",
+                    "description": "HuggingFace repo ID (e.g. username/dataset-name).",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Local dataset or policy name.",
+                },
+                "token": {
+                    "type": "string",
+                    "description": "HuggingFace token (optional, falls back to HF_TOKEN env or cached login).",
+                },
+                "private": {
+                    "type": "boolean",
+                    "description": "Whether to create a private repo on push.",
+                },
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+    },
 }
 
 
@@ -337,6 +371,8 @@ class EmbodiedToolGroup(Tool):
             return await self._execute_train(kwargs)
         if self._group_name == "infer":
             return await self._execute_infer(kwargs)
+        if self._group_name == "hub":
+            return await self._execute_hub(kwargs)
         return f"Unknown tool group: {self._group_name}"
 
     async def _execute_setup(self, kwargs: dict[str, Any]) -> str | list:
@@ -403,6 +439,14 @@ class EmbodiedToolGroup(Tool):
         return await _run_with_service(
             svc,
             lambda manifest: svc.infer.run_policy(manifest, kwargs, self._tty_handoff),
+        )
+
+    async def _execute_hub(self, kwargs: dict[str, Any]) -> str | list:
+        svc = _get_service(self.embodied_service)
+        action = kwargs["action"]
+        return await _run_with_service(
+            svc,
+            lambda manifest: _run_hub_action(svc.hub, action, manifest, kwargs, self._tty_handoff),
         )
 
 
@@ -507,6 +551,19 @@ async def _run_with_service(service: Any, func: Any) -> str | list:
         return await func(service.manifest)
     except ActionError as exc:
         return str(exc)
+
+
+async def _run_hub_action(
+    hub: Any,
+    action: str,
+    manifest: Any,
+    kwargs: dict[str, Any],
+    tty_handoff: Any,
+) -> str:
+    method = getattr(hub, action, None)
+    if method is None:
+        return f"Unknown hub action: {action}"
+    return await method(manifest, kwargs, tty_handoff)
 
 
 async def _run_train_action(

@@ -27,6 +27,7 @@ def register_all_routes(
     from roboclaw.http.routes.replay import register_replay_routes
     from roboclaw.http.routes.train import register_train_routes
     from roboclaw.http.routes.infer import register_infer_routes
+    from roboclaw.http.routes.hub import register_hub_routes
 
     register_session_routes(app, service)
     register_hardware_routes(app, service)
@@ -39,3 +40,4 @@ def register_all_routes(
     register_replay_routes(app, service)
     register_train_routes(app, service)
     register_infer_routes(app, service)
+    register_hub_routes(app, service)

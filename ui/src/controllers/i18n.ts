@@ -138,6 +138,17 @@ const translations = {
     embodimentSource: '来源',
     dataQualityPlaceholder: '数据质量分析（即将推出）',
 
+    // Hub
+    pushToHub: '上传到 Hub',
+    pullFromHub: '从 Hub 下载',
+    repoIdPlaceholder: 'HuggingFace 仓库 ID (如 user/name)',
+    download: '下载',
+    downloading: '下载中...',
+    hubToken: 'HF Token (可选)',
+    hubTokenPlaceholder: '留空使用环境变量或缓存的 token',
+    enterRepoId: '请输入 HuggingFace 仓库 ID',
+    downloadPolicy: '下载模型',
+
     // Hardware
     hwReady: '硬件就绪',
     hwNotReady: '硬件未就绪',
@@ -348,6 +359,18 @@ const translations = {
     embodimentBusy: 'Embodiment busy',
     embodimentSource: 'Source',
     dataQualityPlaceholder: 'Data Quality Analysis (coming soon)',
+
+    // Hub
+    pushToHub: 'Push to Hub',
+    pullFromHub: 'Download from Hub',
+    repoIdPlaceholder: 'HuggingFace repo ID (e.g. user/name)',
+    download: 'Download',
+    downloading: 'Downloading...',
+    uploading: 'Uploading...',
+    hubToken: 'HF Token (optional)',
+    hubTokenPlaceholder: 'Leave empty to use env or cached token',
+    enterRepoId: 'Enter HuggingFace repo ID',
+    downloadPolicy: 'Download Policy',
 
     // Hardware
     hwReady: 'Hardware Ready',

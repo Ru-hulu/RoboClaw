@@ -4,17 +4,29 @@ import { useI18n } from '../controllers/i18n'
 
 export default function DataView() {
   const store = useDashboard()
-  const { datasets, loading, session, policies } = store
+  const { datasets, loading, session, policies, hubLoading, hubProgress } = store
   const { t } = useI18n()
 
   const [trainDataset, setTrainDataset] = useState('')
   const [trainSteps, setTrainSteps] = useState(100000)
   const [trainDevice, setTrainDevice] = useState('cuda')
 
+  // Hub state
+  const [hubToken, setHubToken] = useState('')
+  const [pullDatasetRepo, setPullDatasetRepo] = useState('')
+  const [pullPolicyRepo, setPullPolicyRepo] = useState('')
+
   useEffect(() => {
     store.loadDatasets()
     store.fetchTrainPolicies()
   }, [])
+
+  const promptPush = (type: 'dataset' | 'policy', name: string) => {
+    const repoId = prompt(t('enterRepoId'))
+    if (!repoId) return
+    if (type === 'dataset') store.pushDataset(name, repoId, hubToken)
+    else store.pushPolicy(name, repoId, hubToken)
+  }
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
@@ -50,6 +62,13 @@ export default function DataView() {
                   {d.total_frames != null ? ` · ${d.total_frames} fr` : ''}
                 </span>
                 <button
+                  disabled={!!hubLoading}
+                  onClick={() => promptPush('dataset', d.name)}
+                  className="px-2 py-0.5 text-ac/60 rounded text-xs hover:text-ac hover:bg-ac/10 transition-colors disabled:opacity-25"
+                >
+                  {t('pushToHub')}
+                </button>
+                <button
                   onClick={() => {
                     if (confirm(`${t('deleteConfirm')} "${d.name}"?`)) store.deleteDataset(d.name)
                   }}
@@ -60,6 +79,44 @@ export default function DataView() {
               </div>
             ))}
           </div>
+
+          {/* Pull dataset from Hub */}
+          <div className="mt-4 pt-4 border-t border-bd/40">
+            <h4 className="text-xs font-bold text-tx3 uppercase mb-2">{t('pullFromHub')}</h4>
+            <div className="flex gap-2">
+              <input
+                placeholder={t('repoIdPlaceholder')}
+                value={pullDatasetRepo}
+                onChange={(e) => setPullDatasetRepo(e.target.value)}
+                className="flex-1 bg-bg border border-bd text-tx px-3 py-1.5 rounded-lg text-sm
+                  focus:outline-none focus:border-ac"
+              />
+              <button
+                disabled={!pullDatasetRepo || !!hubLoading}
+                onClick={() => { store.pullDataset(pullDatasetRepo, '', hubToken); setPullDatasetRepo('') }}
+                className="px-3 py-1.5 bg-ac/10 text-ac rounded-lg text-sm font-medium
+                  hover:bg-ac/20 transition-colors disabled:opacity-25 disabled:cursor-not-allowed"
+              >
+                {hubLoading === 'pullDataset' ? t('downloading') : t('download')}
+              </button>
+            </div>
+          </div>
+
+          {/* Hub progress bar */}
+          {hubProgress && !hubProgress.done && hubLoading?.startsWith('pull') && (
+            <div className="mt-3">
+              <div className="flex items-center justify-between text-2xs text-tx3 mb-1">
+                <span>{hubProgress.operation}</span>
+                <span>{hubProgress.progress_percent.toFixed(1)}%</span>
+              </div>
+              <div className="w-full bg-bd/30 rounded-full h-1.5">
+                <div
+                  className="bg-ac h-1.5 rounded-full transition-all duration-300"
+                  style={{ width: `${Math.min(hubProgress.progress_percent, 100)}%` }}
+                />
+              </div>
+            </div>
+          )}
 
           {/* Data quality placeholder */}
           <div className="mt-6 pt-4 border-t border-bd/40">
@@ -115,18 +172,90 @@ export default function DataView() {
           </section>
 
           {/* Policies */}
-          {policies.length > 0 && (
-            <section className="bg-sf rounded-xl p-5 shadow-card shadow-inset-gn">
-              <h3 className="text-sm font-bold text-tx uppercase tracking-wide mb-4">{t('policies') || 'Policies'}</h3>
-              <div className="space-y-1.5">
-                {policies.map((p: any, i: number) => (
-                  <div key={i} className="bg-bg border border-bd/30 rounded-lg px-3 py-2 text-sm font-mono text-tx2 truncate">
+          <section className="bg-sf rounded-xl p-5 shadow-card shadow-inset-gn">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-bold text-tx uppercase tracking-wide">{t('policies') || 'Policies'}</h3>
+              <button
+                onClick={store.fetchTrainPolicies}
+                className="px-2.5 py-0.5 bg-ac/10 text-ac rounded text-xs font-medium hover:bg-ac/20 transition-colors"
+              >
+                {t('refresh')}
+              </button>
+            </div>
+
+            {policies.length === 0 && (
+              <div className="text-tx3 text-center py-4 text-sm">{t('noPolicies')}</div>
+            )}
+            <div className="space-y-1.5">
+              {policies.map((p: any, i: number) => (
+                <div key={i} className="bg-bg border border-bd/30 rounded-lg px-3 py-2 text-sm flex items-center gap-2">
+                  <span className="flex-1 font-mono text-tx2 truncate">
                     {typeof p === 'string' ? p : p.name || JSON.stringify(p)}
-                  </div>
-                ))}
+                  </span>
+                  <button
+                    disabled={!!hubLoading}
+                    onClick={() => promptPush('policy', typeof p === 'string' ? p : p.name)}
+                    className="px-2 py-0.5 text-ac/60 rounded text-xs hover:text-ac hover:bg-ac/10 transition-colors disabled:opacity-25"
+                  >
+                    {t('pushToHub')}
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            {/* Pull policy from Hub */}
+            <div className="mt-4 pt-4 border-t border-bd/40">
+              <h4 className="text-xs font-bold text-tx3 uppercase mb-2">{t('downloadPolicy')}</h4>
+              <div className="flex gap-2">
+                <input
+                  placeholder={t('repoIdPlaceholder')}
+                  value={pullPolicyRepo}
+                  onChange={(e) => setPullPolicyRepo(e.target.value)}
+                  className="flex-1 bg-bg border border-bd text-tx px-3 py-1.5 rounded-lg text-sm
+                    focus:outline-none focus:border-ac"
+                />
+                <button
+                  disabled={!pullPolicyRepo || !!hubLoading}
+                  onClick={() => { store.pullPolicy(pullPolicyRepo, '', hubToken); setPullPolicyRepo('') }}
+                  className="px-3 py-1.5 bg-ac/10 text-ac rounded-lg text-sm font-medium
+                    hover:bg-ac/20 transition-colors disabled:opacity-25 disabled:cursor-not-allowed"
+                >
+                  {hubLoading === 'pullPolicy' ? t('downloading') : t('download')}
+                </button>
               </div>
-            </section>
-          )}
+            </div>
+
+            {/* Hub progress bar for policy downloads */}
+            {hubProgress && !hubProgress.done && hubLoading === 'pullPolicy' && (
+              <div className="mt-3">
+                <div className="flex items-center justify-between text-2xs text-tx3 mb-1">
+                  <span>{hubProgress.operation}</span>
+                  <span>{hubProgress.progress_percent.toFixed(1)}%</span>
+                </div>
+                <div className="w-full bg-bd/30 rounded-full h-1.5">
+                  <div
+                    className="bg-gn h-1.5 rounded-full transition-all duration-300"
+                    style={{ width: `${Math.min(hubProgress.progress_percent, 100)}%` }}
+                  />
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* HF Token */}
+          <section className="bg-sf rounded-xl p-4 shadow-card">
+            <label className="flex flex-col gap-1 text-2xs text-tx3 font-mono">
+              {t('hubToken')}
+              <input
+                type="password"
+                placeholder={t('hubTokenPlaceholder')}
+                value={hubToken}
+                onChange={(e) => setHubToken(e.target.value)}
+                className="bg-bg border border-bd text-tx px-3 py-1.5 rounded-lg text-sm
+                  focus:outline-none focus:border-ac"
+              />
+            </label>
+          </section>
         </div>
       </div>
     </div>

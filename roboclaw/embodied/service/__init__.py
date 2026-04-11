@@ -16,6 +16,7 @@ from roboclaw.embodied.embodiment.hardware.monitor import (
 from roboclaw.embodied.embodiment.lock import EmbodimentBusyError, EmbodimentFileLock
 from roboclaw.embodied.embodiment.manifest import Manifest
 from roboclaw.embodied.embodiment.manifest.binding import Binding
+from roboclaw.embodied.service.hub import HubService
 from roboclaw.embodied.service.session import (
     InferSession, RecordSession, ReplaySession, Session,
     TeleopSession, TrainSession,
@@ -83,6 +84,7 @@ class EmbodiedService:
         self.replay = ReplaySession(self)
         self.train = TrainSession(self)
         self.infer = InferSession(self)
+        self.hub = HubService(self)
         self.doctor = DoctorService(self)
 
         for session in (self.teleop, self.record, self.replay, self.infer):
