@@ -6,12 +6,12 @@ pytest.importorskip("fastapi")
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from roboclaw.http import explorer_routes
+from roboclaw.http.routes import explorer as explorer_routes
 
 
 def test_explorer_dashboard_uses_remote_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     app = FastAPI()
-    app.include_router(explorer_routes.router)
+    explorer_routes.register_explorer_routes(app)
     client = TestClient(app)
 
     monkeypatch.setattr(
@@ -52,7 +52,7 @@ def test_explorer_dashboard_uses_remote_payload(monkeypatch: pytest.MonkeyPatch)
 
 def test_explorer_episode_uses_remote_detail(monkeypatch: pytest.MonkeyPatch) -> None:
     app = FastAPI()
-    app.include_router(explorer_routes.router)
+    explorer_routes.register_explorer_routes(app)
     client = TestClient(app)
 
     monkeypatch.setattr(
@@ -99,7 +99,7 @@ def test_explorer_episode_uses_remote_detail(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_explorer_dataset_info_uses_remote_summary(monkeypatch: pytest.MonkeyPatch) -> None:
     app = FastAPI()
-    app.include_router(explorer_routes.router)
+    explorer_routes.register_explorer_routes(app)
     client = TestClient(app)
 
     monkeypatch.setattr(

@@ -46,8 +46,7 @@ def register_all_routes(
     register_infer_routes(app, service)
     register_hub_routes(app, service)
 
-    # Curation + Explorer routes (standalone APIRouters)
-    from roboclaw.http.curation_routes import router as curation_router
-    from roboclaw.http.explorer_routes import router as explorer_router
-    app.include_router(curation_router)
-    app.include_router(explorer_router)
+    from roboclaw.http.routes.curation import register_curation_routes
+    from roboclaw.http.routes.explorer import register_explorer_routes
+    register_curation_routes(app)
+    register_explorer_routes(app)

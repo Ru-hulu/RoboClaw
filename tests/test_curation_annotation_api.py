@@ -10,7 +10,7 @@ pytest.importorskip("fastapi")
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from roboclaw.http import curation_routes
+from roboclaw.http.routes import curation as curation_routes
 from roboclaw.data.curation import exports as curation_exports
 from roboclaw.data.curation import hf_import as curation_hf_import
 from roboclaw.data.curation import serializers as curation_serializers
@@ -101,7 +101,7 @@ def _build_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Test
     )
 
     app = FastAPI()
-    app.include_router(curation_routes.router)
+    curation_routes.register_curation_routes(app)
     return TestClient(app), dataset_path
 
 
@@ -489,7 +489,7 @@ def test_workflow_datasets_preserve_nested_hf_names(
         lambda name: (dataset_root / name).resolve(),
     )
     app = FastAPI()
-    app.include_router(curation_routes.router)
+    curation_routes.register_curation_routes(app)
     client = TestClient(app)
 
     response = client.get("/api/curation/datasets")
@@ -515,7 +515,7 @@ def test_resolve_dataset_path_rejects_traversal(
         lambda: dataset_root,
     )
     app = FastAPI()
-    app.include_router(curation_routes.router)
+    curation_routes.register_curation_routes(app)
     client = TestClient(app)
 
     response = client.get(
@@ -558,7 +558,7 @@ def test_workflow_import_hf_dataset_job(
         lambda name: (dataset_root / name).resolve(),
     )
     app = FastAPI()
-    app.include_router(curation_routes.router)
+    curation_routes.register_curation_routes(app)
     client = TestClient(app)
 
     queued = client.post(
@@ -584,7 +584,7 @@ def test_workflow_import_hf_dataset_job(
 
 def test_workflow_dataset_detail_uses_remote_dataset_info(monkeypatch: pytest.MonkeyPatch) -> None:
     app = FastAPI()
-    app.include_router(curation_routes.router)
+    curation_routes.register_curation_routes(app)
     client = TestClient(app)
 
     monkeypatch.setattr(
