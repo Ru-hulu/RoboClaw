@@ -220,7 +220,7 @@ class EmbodiedService:
         )
         self.acquire_embodiment("inferring")
         self._active_session = self.infer
-        await self.infer.start(argv, initial_state=SessionState.INFERRING)
+        await self.infer.start(argv)
 
     async def dismiss_error(self) -> None:
         """Clear error state and release embodiment lock so user can retry."""
