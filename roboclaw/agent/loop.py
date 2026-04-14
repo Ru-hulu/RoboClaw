@@ -450,11 +450,7 @@ class AgentLoop:
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
 
-        self._save_turn(
-            session,
-            self._attach_user_metadata(all_msgs, msg.metadata or {}),
-            1 + len(history),
-        )
+        self._save_turn(session, all_msgs, 1 + len(history))
         self.sessions.save(session)
         self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
 
