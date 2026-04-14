@@ -29,7 +29,9 @@ def register_all_routes(
     from roboclaw.http.routes.train import register_train_routes
     from roboclaw.http.routes.infer import register_infer_routes
     from roboclaw.http.routes.hub import register_hub_routes
+    from roboclaw.http.routes.chat_uploads import register_chat_upload_routes
 
+    register_chat_upload_routes(app)
     register_session_routes(app, service)
     register_hardware_routes(app, service)
     register_setup_routes(app, service)
