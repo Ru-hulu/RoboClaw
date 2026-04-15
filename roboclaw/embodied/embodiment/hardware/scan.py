@@ -107,6 +107,37 @@ def list_serial_device_paths() -> list[str]:
     )
 
 
+def list_video_device_paths() -> list[str]:
+    """Return /dev/videoN paths present on the system."""
+    return sorted(glob.glob("/dev/video*"))
+
+
+def check_device_permissions() -> dict[str, dict[str, object]]:
+    """Check R/W access for serial and camera devices.
+
+    Returns ``{serial: {ok, count}, camera: {ok, count}, platform}``.
+    On non-Linux platforms serial/camera are always reported as ok.
+    """
+    if sys.platform != "linux":
+        return {
+            "serial": {"ok": True, "count": 0},
+            "camera": {"ok": True, "count": 0},
+            "platform": sys.platform,
+        }
+
+    serial_devs = list_serial_device_paths()
+    video_devs = list_video_device_paths()
+
+    serial_ok = all(os.access(d, os.R_OK | os.W_OK) for d in serial_devs) if serial_devs else True
+    camera_ok = all(os.access(d, os.R_OK | os.W_OK) for d in video_devs) if video_devs else True
+
+    return {
+        "serial": {"ok": serial_ok, "count": len(serial_devs)},
+        "camera": {"ok": camera_ok, "count": len(video_devs)},
+        "platform": "linux",
+    }
+
+
 
 def suppress_stderr() -> int:
     """Redirect stderr to /dev/null. Returns saved fd for restore_stderr."""
@@ -179,9 +210,11 @@ def _usb_device_key(by_path_str: str) -> str:
     """Extract physical USB device from by-path.
 
     e.g. "pci-0000:00:14.0-usb-0:3:1.0-video-index0" → "usb-0:3"
-    Different interfaces (1.0, 1.3) on the same port are the same device.
+    e.g. "pci-0000:00:14.0-usb-0:8.2:1.0-video-index0" → "usb-0:8.2"
+    Different interfaces (1.0, 1.3) on the same port are the same device,
+    but different hub sub-ports (8.1, 8.2, 8.3) are different devices.
     """
-    m = re.search(r"(usb-\d+:\d+)", by_path_str)
+    m = re.search(r"(usb-\d+:\d+(?:\.\d+)*)", by_path_str)
     return m.group(1) if m else ""
 
 
@@ -216,7 +249,11 @@ def _dedupe_by_usb_device(cameras: list[VideoInterface]) -> list[VideoInterface]
 
 
 def _try_open_camera(cv2, index: int, dev: str, by_path: dict, by_id: dict) -> VideoInterface | None:
-    """Open a single camera by index, return VideoInterface or None."""
+    """Open a single camera by index, return VideoInterface or None.
+
+    Always attempts MJPG compressed streaming — multiple cameras on the
+    same USB hub cannot share bandwidth with uncompressed YUYV.
+    """
     cap = cv2.VideoCapture(index)
     try:
         if not cap.isOpened():
@@ -224,21 +261,17 @@ def _try_open_camera(cv2, index: int, dev: str, by_path: dict, by_id: dict) -> V
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         real = os.path.realpath(dev)
-        fourcc = ""
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        if fps < 30:
-            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-            cap.set(cv2.CAP_PROP_FPS, 30)
-            if cap.get(cv2.CAP_PROP_FPS) >= 30:
-                fourcc = "MJPG"
-                fps = 30
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        cap.set(cv2.CAP_PROP_FPS, 30)
+        fourcc = "MJPG" if cap.get(cv2.CAP_PROP_FPS) >= 30 else ""
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
         return VideoInterface(
             by_path=by_path.get(real, ""),
             by_id=by_id.get(real, ""),
             dev=dev,
             width=w,
             height=h,
-            fps=int(fps),
+            fps=fps or 30,
             fourcc=fourcc,
         )
     finally:
