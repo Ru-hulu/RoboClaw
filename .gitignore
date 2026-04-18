@@ -1,7 +1,6 @@
 .worktrees/
 .assets
 .docs
-AGENTS.md
 .env
 *.pyc
 dist/
