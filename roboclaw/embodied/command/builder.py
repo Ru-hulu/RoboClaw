@@ -8,14 +8,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from roboclaw.data.datasets import DatasetRuntimeRef
 from roboclaw.embodied.command.helpers import (
     ActionError,
-    dataset_path,
     group_arms,
     resolve_bimanual_pair,
     resolve_action_arms,
     resolve_cameras,
-    validate_dataset_name,
 )
 from roboclaw.embodied.embodiment.arm.registry import get_model
 from roboclaw.embodied.embodiment.manifest.binding import ArmBinding, ArmRole, CameraBinding
@@ -114,8 +113,7 @@ def _camera_args(cameras_dict: dict[str, dict[str, Any]]) -> list[str]:
 
 
 def _dataset_args(
-    repo_id: str,
-    root: Path,
+    runtime: DatasetRuntimeRef,
     task: str,
     fps: int,
     num_episodes: int,
@@ -125,8 +123,8 @@ def _dataset_args(
 ) -> list[str]:
     """Dataset CLI args for record/infer."""
     args = [
-        f"--dataset.repo_id={repo_id}",
-        f"--dataset.root={root}",
+        f"--dataset.repo_id={runtime.repo_id}",
+        f"--dataset.root={runtime.local_path}",
         f"--dataset.single_task={task}",
         "--dataset.push_to_hub=false",
         f"--dataset.fps={fps}",
@@ -208,16 +206,16 @@ class CommandBuilder:
     def record(
         manifest: Any,
         *,
+        dataset: DatasetRuntimeRef,
         task: str = "default_task",
-        dataset_name: str = "",
         num_episodes: int = 10,
         fps: int = 30,
         episode_time_s: int = 300,
         reset_time_s: int = 10,
         arms: str = "",
         use_cameras: bool = True,
-    ) -> tuple[list[str], str]:
-        """Build recording argv. Returns (argv, dataset_name)."""
+    ) -> list[str]:
+        """Build recording argv."""
         resolved = resolve_action_arms(manifest, arms)
         grouped = group_arms(resolved)
         _validate_pairing(grouped["followers"], grouped["leaders"])
@@ -226,50 +224,37 @@ class CommandBuilder:
         leaders = grouped["leaders"]
         cameras = list(manifest.cameras) if use_cameras else []
 
-        # Resolve dataset name
-        if not dataset_name:
-            dataset_name = f"rec_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        validate_dataset_name(dataset_name)
-
-        ds_path = dataset_path(manifest, dataset_name)
-        resume = ds_path.exists()
-        repo_id = f"local/{dataset_name}"
-
         ds_args = _dataset_args(
-            repo_id, ds_path, task, fps, num_episodes,
-            episode_time_s, reset_time_s, resume,
+            dataset, task, fps, num_episodes,
+            episode_time_s, reset_time_s, dataset.local_path.exists(),
         )
 
         argv = _wrapper_args("record")
         argv.extend(_robot_argv(followers, leaders, cameras))
         argv.extend(ds_args)
-        return argv, dataset_name
+        return argv
 
     @staticmethod
     def replay(
         manifest: Any,
         *,
-        dataset_name: str,
+        dataset: DatasetRuntimeRef,
         episode: int = 0,
         fps: int = 30,
         arms: str = "",
     ) -> list[str]:
         """Build replay argv (follower-only, no teleop/leader)."""
-        validate_dataset_name(dataset_name)
         resolved = resolve_action_arms(manifest, arms)
         grouped = group_arms(resolved)
         followers = grouped["followers"]
         if not followers:
             raise ActionError("No follower arms configured for replay.")
 
-        ds_path = dataset_path(manifest, dataset_name)
-        repo_id = f"local/{dataset_name}"
-
         argv = _wrapper_args("replay")
         argv.extend(_robot_argv(followers))
         argv.extend([
-            f"--dataset.repo_id={repo_id}",
-            f"--dataset.root={ds_path}",
+            f"--dataset.repo_id={dataset.repo_id}",
+            f"--dataset.root={dataset.local_path}",
             f"--dataset.episode={episode}",
             f"--dataset.fps={fps}",
         ])
@@ -279,24 +264,22 @@ class CommandBuilder:
     def train(
         manifest: Any,
         *,
-        dataset_name: str,
+        dataset: DatasetRuntimeRef,
         steps: int = 100_000,
         device: str = "cuda",
     ) -> list[str]:
         """Build training argv (standalone lerobot-train, not through wrapper)."""
-        validate_dataset_name(dataset_name)
-        ds_path = dataset_path(manifest, dataset_name)
         policies_root = manifest.snapshot.get("policies", {}).get("root", "")
-        output_dir = Path(policies_root).expanduser() / dataset_name
+        output_dir = Path(policies_root).expanduser() / dataset.name
 
         argv = [
             "lerobot-train",
-            f"--dataset.repo_id=local/{dataset_name}",
-            f"--dataset.root={ds_path}",
+            f"--dataset.repo_id={dataset.repo_id}",
+            f"--dataset.root={dataset.local_path}",
             "--dataset.video_backend=pyav",
             "--policy.type=act",
             "--policy.push_to_hub=false",
-            f"--policy.repo_id=local/{dataset_name}",
+            f"--policy.repo_id={dataset.repo_id}",
             f"--output_dir={output_dir}",
             f"--steps={steps}",
             f"--policy.device={device}",
@@ -315,9 +298,9 @@ class CommandBuilder:
     def infer(
         manifest: Any,
         *,
+        dataset: DatasetRuntimeRef,
         checkpoint_path: str = "",
-        source_dataset: str = "",
-        dataset_name: str = "",
+        source_dataset: DatasetRuntimeRef | None = None,
         task: str = "eval",
         num_episodes: int = 1,
         episode_time_s: int = 60,
@@ -327,7 +310,7 @@ class CommandBuilder:
         """Build inference argv (uses 'record' action with --policy.path)."""
         if not checkpoint_path:
             policies_root = manifest.snapshot.get("policies", {}).get("root", "")
-            base = source_dataset or dataset_name or ""
+            base = source_dataset.name if source_dataset else dataset.name
             if base:
                 checkpoint_path = str(
                     Path(policies_root).expanduser() / base
@@ -349,27 +332,18 @@ class CommandBuilder:
 
         cameras = list(manifest.cameras) if use_cameras else []
 
-        # Resolve output dataset name
-        if not dataset_name:
-            dataset_name = f"eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        validate_dataset_name(dataset_name)
-
-        ds_path = dataset_path(manifest, dataset_name)
-        resume = ds_path.exists()
-        repo_id = f"local/{dataset_name}"
-
         policy_args = [
             f"--policy.path={Path(checkpoint_path).expanduser()}",
         ]
         ds_args = [
-            f"--dataset.repo_id={repo_id}",
-            f"--dataset.root={ds_path}",
+            f"--dataset.repo_id={dataset.repo_id}",
+            f"--dataset.root={dataset.local_path}",
             f"--dataset.single_task={task}",
             "--dataset.push_to_hub=false",
             f"--dataset.num_episodes={num_episodes}",
             f"--dataset.episode_time_s={episode_time_s}",
         ]
-        if resume:
+        if dataset.local_path.exists():
             ds_args.append("--resume=true")
 
         argv = _wrapper_args("record")

@@ -186,8 +186,10 @@ async def test_list_datasets_with_entries(tmp_path: Path) -> None:
 
     datasets = json.loads(result)
     assert len(datasets) == 1
-    assert datasets[0]["name"] == "demo1"
-    assert datasets[0]["episodes"] == 3
+    assert datasets[0]["id"] == "local/demo1"
+    assert datasets[0]["label"] == "demo1"
+    assert datasets[0]["stats"]["total_episodes"] == 3
+    assert datasets[0]["runtime"]["name"] == "demo1"
 
 
 @pytest.mark.asyncio

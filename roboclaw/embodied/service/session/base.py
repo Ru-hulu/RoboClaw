@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from roboclaw.embodied.board import Board, InputConsumer, OutputConsumer, SessionState
+from roboclaw.embodied.board import Board, EpisodePhase, InputConsumer, OutputConsumer, SessionState
 from roboclaw.embodied.executor import SubprocessExecutor
 
 if TYPE_CHECKING:
@@ -96,9 +96,10 @@ class Session:
     async def stop(self) -> None:
         """Graceful stop: ESC -> wait -> SIGINT -> wait -> kill."""
         if self._process is None or self._process.returncode is not None:
-            await self.board.update(state=SessionState.IDLE)
+            await self.board.update(**self._idle_fields())
             return
         self._stopped = True
+        await self._enter_stopping_state()
 
         # Step 1: Send ESC via stdin
         if self._process.stdin:
@@ -179,7 +180,7 @@ class Session:
 
         if not self._stopped:
             if rc in (0, None, -2, 130, -15):
-                await self.board.update(state=SessionState.IDLE)
+                await self.board.update(**self._idle_fields())
             else:
                 await self.board.update(state=SessionState.ERROR, error=self._format_exit_error(rc))
             # Release embodiment lock — subprocess is dead, hardware is free
@@ -207,7 +208,25 @@ class Session:
             except asyncio.CancelledError:
                 pass
         self._wait_task = None
-        await self.board.update(state=SessionState.IDLE)
+        await self.board.update(**self._idle_fields())
+
+    async def _enter_stopping_state(self) -> None:
+        state = self.board.get("state", SessionState.IDLE)
+        if state in (SessionState.IDLE, SessionState.ERROR, SessionState.STOPPING):
+            return
+
+        fields: dict[str, Any] = {"state": SessionState.STOPPING}
+        phase = self.board.get("episode_phase", "")
+        if state == SessionState.RECORDING and phase not in (EpisodePhase.SAVING, EpisodePhase.RESETTING):
+            fields["episode_phase"] = EpisodePhase.STOPPING
+        await self.board.update(**fields)
+
+    def _idle_fields(self) -> dict[str, Any]:
+        return {
+            "state": SessionState.IDLE,
+            "episode_phase": "",
+            "prepare_stage": "",
+        }
 
     async def wait(self) -> None:
         """Wait for the natural-exit monitor to finish."""

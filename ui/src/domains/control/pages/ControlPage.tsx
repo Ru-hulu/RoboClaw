@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useSessionStore, type SessionState } from '@/domains/session/store/useSessionStore'
-import { useHardwareStore } from '@/domains/hardware/store/useHardwareStore'
+import { useHardwareStore, type HardwareCapabilities, type OperationCapability } from '@/domains/hardware/store/useHardwareStore'
 import { useDatasetsStore } from '@/domains/datasets/store/useDatasetsStore'
 import { useTrainingStore } from '@/domains/training/store/useTrainingStore'
 import { useI18n } from '@/i18n'
@@ -9,22 +9,40 @@ import { CameraPreviewPanel } from '@/domains/control/components/CameraPreviewPa
 import { ServoPanel } from '@/domains/hardware/components/ServoPanel'
 import { LossCurvePanel } from '@/domains/training/components/LossCurvePanel'
 
-function canDo(state: SessionState, hwReady: boolean) {
+const blockedCapability: OperationCapability = { ready: false, missing: [] }
+
+function capabilityOf(
+  capabilities: HardwareCapabilities | undefined,
+  name: keyof HardwareCapabilities,
+): OperationCapability {
+  return capabilities?.[name] ?? blockedCapability
+}
+
+function canDo(
+  state: SessionState,
+  capabilities: HardwareCapabilities | undefined,
+  useRecordCameras: boolean,
+) {
   const canStart = state === 'idle' || state === 'error'
   const tele = state === 'teleoperating'
   const rec = state === 'recording'
   const rep = state === 'replaying'
   const inf = state === 'inferring'
+  const recordCapability = capabilityOf(
+    capabilities,
+    useRecordCameras ? 'record' : 'record_without_cameras',
+  )
+  const inferCapability = capabilityOf(capabilities, 'infer')
   return {
-    teleopStart: canStart && hwReady,
+    teleopStart: canStart && capabilityOf(capabilities, 'teleop').ready,
     teleopStop: tele,
-    recStart: (canStart || tele) && hwReady,
+    recStart: canStart && recordCapability.ready,
     recStop: rec,
     saveEp: rec,
     discardEp: rec,
-    replayStart: canStart && hwReady,
+    replayStart: canStart && capabilityOf(capabilities, 'replay').ready,
     replayStop: rep,
-    inferStart: canStart && hwReady,
+    inferStart: canStart && inferCapability.ready,
     inferStop: inf,
   }
 }
@@ -76,11 +94,13 @@ export default function ControlPage() {
   const loadDatasets = useDatasetsStore((state) => state.loadDatasets)
   const policies = useTrainingStore((state) => state.policies)
   const loadPolicies = useTrainingStore((state) => state.loadPolicies)
-  const { state, episode_phase: episodePhase, saved_episodes: savedEpisodes, target_episodes: targetEpisodes, embodiment_owner: owner, prepare_stage: prepareStage } = session
-  const hwReady = hwStatus?.ready ?? false
-  const ok = canDo(state, hwReady)
   const { t } = useI18n()
   const navigate = useNavigate()
+  const { state, episode_phase: episodePhase, saved_episodes: savedEpisodes, target_episodes: targetEpisodes, embodiment_owner: owner, prepare_stage: prepareStage } = session
+  const teleopStopping = loading === 'teleop-stop' || (state === 'stopping' && owner === 'teleop')
+  const recordStopping = loading === 'record-stop' || (state === 'stopping' && owner === 'recording')
+  const replayStopping = loading === 'replay-stop' || (state === 'stopping' && owner === 'replaying')
+  const inferStopping = loading === 'infer-stop' || (state === 'stopping' && owner === 'inferring')
 
   function translateMissing(msg: string): string {
     if (msg === 'No follower arm configured') return t('hwMissingNoFollower')
@@ -91,6 +111,7 @@ export default function ControlPage() {
       return `${msg.match(/Arm '(.+?)'/)?.[1] ?? ''} ${t('hwMissingNotCalibrated')}`
     if (msg.includes('is disconnected') && msg.startsWith('Camera'))
       return `${msg.match(/Camera '(.+?)'/)?.[1] ?? ''} ${t('hwMissingCameraDisconnected')}`
+    if (msg === 'No cameras configured') return t('hwMissingNoCamera')
     if (msg.includes('mismatch')) return t('hwMissingCountMismatch')
     return msg
   }
@@ -110,6 +131,13 @@ export default function ControlPage() {
   // Replay
   const [replayDataset, setReplayDataset] = useState('')
   const [replayEpisode, setReplayEpisode] = useState(0)
+  const hwReady = hwStatus?.ready ?? false
+  const capabilities = hwStatus?.capabilities
+  const ok = canDo(state, capabilities, useCameras)
+  const teleopCapability = capabilityOf(capabilities, 'teleop')
+  const recordCapability = capabilityOf(capabilities, useCameras ? 'record' : 'record_without_cameras')
+  const replayCapability = capabilityOf(capabilities, 'replay')
+  const inferCapability = capabilityOf(capabilities, 'infer')
 
   useEffect(() => {
     void loadDatasets()
@@ -132,6 +160,7 @@ export default function ControlPage() {
     recording: t('stateRecording'),
     replaying: t('stateReplaying'),
     inferring: t('stateInferring'),
+    stopping: t('stateStopping'),
     calibrating: t('calibrating'),
   }
   const stateBadgeCls: Record<string, string> = {
@@ -140,6 +169,7 @@ export default function ControlPage() {
     recording: 'bg-rd/15 text-rd border-rd/30',
     replaying: 'bg-gn/15 text-gn border-gn/30',
     inferring: 'bg-ac/15 text-ac border-ac/30',
+    stopping: 'bg-yl/15 text-yl border-yl/30',
     calibrating: 'bg-yl/15 text-yl border-yl/30',
   }
 
@@ -175,9 +205,14 @@ export default function ControlPage() {
     })
   }
   const busyReason = busy ? `${stateLabel[state] || state}${owner ? ` (${owner})` : ''}` : ''
+  const capabilityReason = (capability: OperationCapability) =>
+    capability.missing.map(translateMissing).join(' · ')
   const hwAccent = !hwStatus ? 'shadow-inset-ac' : hwStatus.ready ? 'shadow-inset-gn' : 'shadow-inset-yl'
   const camerasExist = hwStatus && hwStatus.cameras.length > 0 && hwStatus.cameras.some((c: any) => c.connected)
   const pct = targetEpisodes > 0 ? Math.round((savedEpisodes / targetEpisodes) * 100) : 0
+  const replayDatasets = datasets.filter(
+    (dataset) => dataset.capabilities.can_replay && !!dataset.runtime && dataset.stats.total_episodes > 0,
+  )
 
   return (
     <div className="page-enter flex flex-col h-full overflow-y-auto">
@@ -267,17 +302,21 @@ export default function ControlPage() {
             <div className="space-y-2">
               <ActionBtn color="ac" disabled={!ok.teleopStart || !!loading}
                 onClick={() => { void doTeleopStart() }}
-                title={busy ? busyReason : undefined}>
+                title={busy ? busyReason : capabilityReason(teleopCapability) || undefined}>
                 {loading === 'teleop' ? t('startingTeleop') : t('startTeleop')}
               </ActionBtn>
               <ActionBtn color="yl" disabled={!ok.teleopStop || !!loading} onClick={() => { void doTeleopStop() }}>
-                {t('stopTeleop')}
+                {teleopStopping ? t('stoppingTeleop') : t('stopTeleop')}
               </ActionBtn>
             </div>
-            {(loading === 'teleop' || state === 'teleoperating') && (
-              <div className="mt-3 flex items-center gap-2 text-xs text-ac font-medium">
-                <span className="w-2 h-2 rounded-full bg-ac animate-pulse" />
-                {loading === 'teleop' ? t('hwInitializing') : t('stateTeleoperating')}
+            {(loading === 'teleop' || state === 'teleoperating' || teleopStopping) && (
+              <div className={`mt-3 flex items-center gap-2 text-xs font-medium ${teleopStopping ? 'text-yl' : 'text-ac'}`}>
+                <span className={`w-2 h-2 rounded-full animate-pulse ${teleopStopping ? 'bg-yl' : 'bg-ac'}`} />
+                {loading === 'teleop'
+                  ? t('hwInitializing')
+                  : teleopStopping
+                    ? t('stoppingTeleop')
+                    : t('stateTeleoperating')}
               </div>
             )}
           </div>
@@ -403,11 +442,11 @@ export default function ControlPage() {
               {mode === 'record' ? (
                 <>
                   <ActionBtn color="gn" disabled={!ok.recStart || !!loading} onClick={handleRecordStart}
-                    title={busy && state !== 'teleoperating' ? busyReason : undefined}>
+                    title={busy ? busyReason : capabilityReason(recordCapability) || undefined}>
                     {loading === 'record' ? t('startingRecord') : t('startRecording')}
                   </ActionBtn>
-                  <ActionBtn color="rd" disabled={!ok.recStop} onClick={() => { void doRecordStop() }}>
-                    {t('stopRecording')}
+                  <ActionBtn color="rd" disabled={!ok.recStop || !!loading} onClick={() => { void doRecordStop() }}>
+                    {recordStopping ? t('stoppingRecord') : t('stopRecording')}
                   </ActionBtn>
                 </>
               ) : (
@@ -420,11 +459,11 @@ export default function ControlPage() {
                         episode_time_s: episodeTime,
                       })
                     }}
-                    title={busy ? busyReason : undefined}>
+                    title={busy ? busyReason : capabilityReason(inferCapability) || undefined}>
                     {loading === 'infer' ? t('startingInference') : t('startInference')}
                   </ActionBtn>
-                  <ActionBtn color="yl" disabled={!ok.inferStop} onClick={() => { void doInferStop() }}>
-                    {t('stopInference')}
+                  <ActionBtn color="yl" disabled={!ok.inferStop || !!loading} onClick={() => { void doInferStop() }}>
+                    {inferStopping ? t('stoppingInference') : t('stopInference')}
                   </ActionBtn>
                 </>
               )}
@@ -469,6 +508,12 @@ export default function ControlPage() {
                 </div>
               </div>
             )}
+            {recordStopping && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-yl font-medium">
+                <span className="w-2 h-2 rounded-full bg-yl animate-pulse" />
+                {t('stoppingRecord')}
+              </div>
+            )}
 
             {/* Inference status */}
             {state === 'preparing' && mode === 'infer' && (
@@ -481,6 +526,12 @@ export default function ControlPage() {
               <div className="mt-2 flex items-center gap-2 text-xs text-ac font-medium">
                 <span className="w-2 h-2 rounded-full bg-ac animate-pulse" />
                 {t('stateInferring')}
+              </div>
+            )}
+            {inferStopping && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-yl font-medium">
+                <span className="w-2 h-2 rounded-full bg-yl animate-pulse" />
+                {t('stoppingInference')}
               </div>
             )}
           </div>
@@ -499,16 +550,16 @@ export default function ControlPage() {
                   className="bg-sf2 border border-bd text-tx px-2 py-1.5 rounded text-sm focus:outline-none focus:border-ac"
                 >
                   <option value="">--</option>
-                  {datasets.filter(d => d.total_episodes && d.total_episodes > 0).map(d => (
-                    <option key={d.name} value={d.name}>
-                      {d.name} ({d.total_episodes} ep)
+                  {replayDatasets.map(d => (
+                    <option key={d.id} value={d.runtime!.name}>
+                      {d.label} ({d.stats.total_episodes} ep)
                     </option>
                   ))}
                 </select>
               </label>
               {(() => {
-                const sel = datasets.find(d => d.name === replayDataset)
-                const maxEp = (sel?.total_episodes ?? 1) - 1
+                const sel = replayDatasets.find(d => d.runtime?.name === replayDataset)
+                const maxEp = (sel?.stats.total_episodes ?? 1) - 1
                 return (
                   <label className="flex flex-col gap-1 text-2xs text-tx3 font-mono w-[90px]">
                     {t('episode')} {sel ? `(0-${maxEp})` : ''}
@@ -522,11 +573,11 @@ export default function ControlPage() {
               <div className="flex gap-2">
                 <ActionBtn color="gn" disabled={!ok.replayStart || !replayDataset || !!loading}
                   onClick={() => { void doReplayStart({ dataset_name: replayDataset, episode: replayEpisode }) }}
-                  title={busy ? busyReason : undefined}>
+                  title={busy ? busyReason : capabilityReason(replayCapability) || undefined}>
                   {loading === 'replay' ? t('startingReplay') : t('startReplay')}
                 </ActionBtn>
-                <ActionBtn color="yl" disabled={!ok.replayStop} onClick={() => { void doReplayStop() }}>
-                  {t('stopReplay')}
+                <ActionBtn color="yl" disabled={!ok.replayStop || !!loading} onClick={() => { void doReplayStop() }}>
+                  {replayStopping ? t('stoppingReplay') : t('stopReplay')}
                 </ActionBtn>
               </div>
             </div>
@@ -540,6 +591,12 @@ export default function ControlPage() {
               <div className="mt-2 flex items-center gap-2 text-xs text-gn font-medium">
                 <span className="w-2 h-2 rounded-full bg-gn animate-pulse" />
                 {t('stateReplaying')}
+              </div>
+            )}
+            {replayStopping && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-yl font-medium">
+                <span className="w-2 h-2 rounded-full bg-yl animate-pulse" />
+                {t('stoppingReplay')}
               </div>
             )}
           </div>

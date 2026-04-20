@@ -6,17 +6,17 @@ import json
 import threading
 from typing import Any
 
+from roboclaw.data.datasets import DatasetCatalog, datasets_root_from_manifest
 from roboclaw.embodied.board import Board, Command, SessionState
 from roboclaw.embodied.board.board import IDLE_STATE
-from roboclaw.embodied.command import CommandBuilder, group_arms
-from roboclaw.embodied.command.helpers import ActionError, resolve_bimanual_pair
+from roboclaw.embodied.command import CommandBuilder
 from roboclaw.embodied.embodiment.hardware.monitor import (
-    ArmStatus, CameraStatus, HardwareMonitor,
-    check_arm_status, check_camera_status,
+    HardwareMonitor, check_arm_status, check_camera_status,
 )
 from roboclaw.embodied.embodiment.lock import EmbodimentBusyError, EmbodimentFileLock
 from roboclaw.embodied.embodiment.manifest import Manifest
 from roboclaw.embodied.embodiment.manifest.binding import Binding
+from roboclaw.embodied.service.capabilities import build_hardware_snapshot
 from roboclaw.embodied.service.hub import HubService
 from roboclaw.embodied.service.session import (
     InferSession, RecordSession, ReplaySession, Session,
@@ -25,38 +25,6 @@ from roboclaw.embodied.service.session import (
 from roboclaw.embodied.service.session.calibrate import CalibrationSession
 from roboclaw.embodied.embodiment.doctor import DoctorService
 from roboclaw.embodied.service.session.setup import SetupSession
-
-
-def _compute_readiness(
-    arms: list[Binding],
-    arm_statuses: list[ArmStatus],
-    camera_statuses: list[CameraStatus],
-) -> tuple[bool, list[str]]:
-    missing: list[str] = []
-    grouped = group_arms(arms)
-    if not grouped["followers"]:
-        missing.append("No follower arm configured")
-    if not grouped["leaders"]:
-        missing.append("No leader arm configured")
-    for status in arm_statuses:
-        if not status.connected:
-            missing.append(f"Arm '{status.alias}' is disconnected")
-        elif not status.calibrated:
-            missing.append(f"Arm '{status.alias}' is not calibrated")
-    for status in camera_statuses:
-        if not status.connected:
-            missing.append(f"Camera '{status.alias}' is disconnected")
-    followers = grouped["followers"]
-    leaders = grouped["leaders"]
-    for role, role_arms in (("followers", followers), ("leaders", leaders)):
-        if len(role_arms) == 2:
-            try:
-                resolve_bimanual_pair(role_arms, role)
-            except ActionError as exc:
-                missing.append(str(exc))
-    if followers and leaders and len(followers) != len(leaders):
-        missing.append(f"Follower/leader count mismatch: {len(followers)} vs {len(leaders)}")
-    return len(missing) == 0, missing
 
 
 class EmbodiedService:
@@ -77,6 +45,7 @@ class EmbodiedService:
         self.board = board or Board()
         self.manifest = manifest or Manifest(board=self.board)
         self.manifest.ensure()
+        self.datasets = DatasetCatalog(root_resolver=lambda: datasets_root_from_manifest(self.manifest))
         self._lock = threading.Lock()
         self._file_lock = EmbodimentFileLock()
         self._embodiment_owner: str = ""
@@ -214,6 +183,7 @@ class EmbodiedService:
     # -- Operations (Web entry points) --
 
     async def start_teleop(self, *, fps: int = 30, arms: str = "") -> None:
+        self._require_capability("teleop")
         argv = CommandBuilder.teleop(self.manifest, fps=fps, arms=arms)
         await self._start_managed_session(self.teleop, owner="teleop", argv=argv)
 
@@ -228,10 +198,12 @@ class EmbodiedService:
         use_cameras: bool = True,
         arms: str = "",
     ) -> str:
-        argv, dataset_name = CommandBuilder.record(
+        self._require_capability("record" if use_cameras else "record_without_cameras")
+        dataset = self.datasets.prepare_recording_dataset(dataset_name, prefix="rec")
+        argv = CommandBuilder.record(
             self.manifest,
+            dataset=dataset.runtime,
             task=task,
-            dataset_name=dataset_name,
             num_episodes=num_episodes,
             fps=fps,
             episode_time_s=episode_time_s,
@@ -240,11 +212,11 @@ class EmbodiedService:
             arms=arms,
         )
         await self._start_managed_session(self.record, owner="recording", argv=argv)
-        await self.board.update(target_episodes=num_episodes, dataset=dataset_name)
+        await self.board.update(target_episodes=num_episodes, dataset=dataset.runtime.name)
         self._recording_started = True
         if self._monitor is not None:
             self._monitor.set_recording_active(True)
-        return dataset_name
+        return dataset.runtime.name
 
     async def start_replay(
         self,
@@ -254,8 +226,10 @@ class EmbodiedService:
         fps: int = 30,
         arms: str = "",
     ) -> None:
+        self._require_capability("replay")
+        dataset = self.datasets.resolve_runtime_dataset(dataset_name)
         argv = CommandBuilder.replay(
-            self.manifest, dataset_name=dataset_name, episode=episode, fps=fps, arms=arms,
+            self.manifest, dataset=dataset.runtime, episode=episode, fps=fps, arms=arms,
         )
         await self._start_managed_session(self.replay, owner="replaying", argv=argv)
 
@@ -271,11 +245,14 @@ class EmbodiedService:
         arms: str = "",
         use_cameras: bool = True,
     ) -> None:
+        self._require_capability("infer" if use_cameras else "infer_without_cameras")
+        output_dataset = self.datasets.prepare_recording_dataset(dataset_name, prefix="eval")
+        source = self.datasets.resolve_runtime_dataset(source_dataset) if source_dataset else None
         argv = CommandBuilder.infer(
             self.manifest,
+            dataset=output_dataset.runtime,
             checkpoint_path=checkpoint_path,
-            source_dataset=source_dataset,
-            dataset_name=dataset_name,
+            source_dataset=source.runtime if source else None,
             task=task,
             num_episodes=num_episodes,
             episode_time_s=episode_time_s,
@@ -293,8 +270,10 @@ class EmbodiedService:
         arms: str = "",
         tty_handoff: Any | None = None,
     ) -> str:
+        self._require_capability("replay")
+        dataset = self.datasets.resolve_runtime_dataset(dataset_name)
         argv = CommandBuilder.replay(
-            self.manifest, dataset_name=dataset_name, episode=episode, fps=fps, arms=arms,
+            self.manifest, dataset=dataset.runtime, episode=episode, fps=fps, arms=arms,
         )
         return await self._run_managed_session(
             self.replay, owner="replaying", argv=argv, tty_handoff=tty_handoff,
@@ -313,11 +292,14 @@ class EmbodiedService:
         use_cameras: bool = True,
         tty_handoff: Any | None = None,
     ) -> str:
+        self._require_capability("infer" if use_cameras else "infer_without_cameras")
+        output_dataset = self.datasets.prepare_recording_dataset(dataset_name, prefix="eval")
+        source = self.datasets.resolve_runtime_dataset(source_dataset) if source_dataset else None
         argv = CommandBuilder.infer(
             self.manifest,
+            dataset=output_dataset.runtime,
             checkpoint_path=checkpoint_path,
-            source_dataset=source_dataset,
-            dataset_name=dataset_name,
+            source_dataset=source.runtime if source else None,
             task=task,
             num_episodes=num_episodes,
             episode_time_s=episode_time_s,
@@ -434,22 +416,28 @@ class EmbodiedService:
         snapshot["status"] = self.get_hardware_status(self.manifest)
         return json.dumps(snapshot, indent=2, ensure_ascii=False)
 
-    def get_hardware_status(self, manifest: Manifest | None = None) -> dict[str, Any]:
+    def _hardware_snapshot(self, manifest: Manifest | None = None) -> dict[str, Any]:
         if manifest is None:
             manifest = self.manifest
-        arms = manifest.arms
-        cameras = manifest.cameras
-        arm_statuses = [check_arm_status(arm) for arm in arms]
-        camera_statuses = [check_camera_status(camera) for camera in cameras]
-        ready, missing = _compute_readiness(arms, arm_statuses, camera_statuses)
+        arm_statuses = [check_arm_status(arm) for arm in manifest.arms]
+        camera_statuses = [check_camera_status(camera) for camera in manifest.cameras]
         active = self._active_session is not None and self._active_session.busy
-        return {
-            "ready": ready,
-            "missing": missing,
-            "arms": [status.to_dict() for status in arm_statuses],
-            "cameras": [status.to_dict() for status in camera_statuses],
-            "session_busy": active,
-        }
+        return build_hardware_snapshot(
+            manifest.arms,
+            arm_statuses,
+            camera_statuses,
+            session_busy=active,
+        ).to_dict()
+
+    def _require_capability(self, capability_name: str) -> None:
+        status = self._hardware_snapshot()
+        capability = status["capabilities"][capability_name]
+        if capability["ready"]:
+            return
+        raise RuntimeError(" · ".join(capability["missing"]))
+
+    def get_hardware_status(self, manifest: Manifest | None = None) -> dict[str, Any]:
+        return self._hardware_snapshot(manifest)
 
     def read_servo_positions(self) -> dict[str, Any]:
         if not self._file_lock.try_shared():

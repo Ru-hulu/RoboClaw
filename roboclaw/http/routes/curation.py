@@ -8,6 +8,7 @@ This module is a thin HTTP translation layer.  Business logic lives in
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -17,24 +18,13 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from loguru import logger
 from pydantic import BaseModel
 
-from roboclaw.data.datasets import (
-    datasets_root,
-    get_dataset_info,
-    list_datasets,
-    resolve_dataset_path,
-)
-from roboclaw.data.explorer.remote import build_remote_dataset_info
+from roboclaw.data.datasets import DatasetCatalog
 from roboclaw.data.curation.exports import (
     export_quality_csv,
     publish_quality_metadata_parquet,
     publish_text_annotations_metadata_parquet,
 )
-from roboclaw.data.curation.hf_import import (
-    get_import_job,
-    record_import_job,
-    run_hf_import,
-    validate_dataset_id_path,
-)
+from roboclaw.data.curation.paths import datasets_root
 from roboclaw.data.curation.service import CurationService
 from roboclaw.data.curation.state import (
     load_annotations,
@@ -45,6 +35,7 @@ from roboclaw.data.curation.state import (
 
 # Module-level service singleton
 _service = CurationService()
+_catalog = DatasetCatalog(root_resolver=lambda: datasets_root())
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +88,13 @@ class DatasetPublishRequest(BaseModel):
 
 
 def _ensure_dataset_workspace(dataset_id: str) -> Path:
-    return resolve_dataset_path(dataset_id)
+    try:
+        dataset = _catalog.require_local_dataset(dataset_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if dataset.local_path is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' has no local workspace")
+    return dataset.local_path
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +112,8 @@ def register_curation_routes(app: FastAPI) -> None:
     @app.get("/api/curation/datasets")
     async def workflow_datasets_list() -> list[dict]:
         """List available datasets."""
-        return list_datasets(datasets_root())
+        datasets = await asyncio.to_thread(_catalog.list_local_datasets)
+        return [dataset.to_dict() for dataset in datasets]
 
     @app.post("/api/curation/datasets/import-hf")
     async def workflow_import_hf_dataset(
@@ -123,51 +121,42 @@ def register_curation_routes(app: FastAPI) -> None:
         background_tasks: BackgroundTasks,
     ) -> dict[str, Any]:
         """Download a Hugging Face dataset snapshot into the local datasets root."""
-        try:
-            validate_dataset_id_path(body.dataset_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
         job_id = uuid4().hex[:12]
-        record_import_job(
+        queued = _catalog.queue_import_job(
             job_id,
             dataset_id=body.dataset_id,
-            status="queued",
             include_videos=body.include_videos,
-            message="Queued for import",
         )
         background_tasks.add_task(
-            run_hf_import,
+            _catalog.run_import_job,
             job_id,
             body.dataset_id,
             include_videos=body.include_videos,
             force=body.force,
         )
-        return {"job_id": job_id, "status": "queued"}
+        return queued.to_dict()
 
     @app.get("/api/curation/datasets/import-status/{job_id}")
     async def workflow_import_hf_status(job_id: str) -> dict[str, Any]:
         """Return background import status for a Hugging Face dataset."""
-        payload = get_import_job(job_id)
+        payload = _catalog.get_import_job(job_id)
         if payload is None:
             raise HTTPException(status_code=404, detail=f"Import job '{job_id}' not found")
-        return payload
+        return payload.to_dict()
 
-    @app.get("/api/curation/datasets/{name:path}")
-    async def workflow_dataset_detail(name: str) -> dict:
+    @app.get("/api/curation/datasets/{dataset_id:path}")
+    async def workflow_dataset_detail(dataset_id: str) -> dict:
         """Get detailed info for a single dataset.
 
-        Uses ``{name:path}`` so nested HF names like ``cadene/droid_1.0.1``
+        Uses ``{dataset_id:path}`` so nested HF names like ``cadene/droid_1.0.1``
         are captured as a single parameter.  This route is registered after
         the fixed-prefix ``/datasets/import-*`` routes to avoid shadowing them.
         """
-        info = get_dataset_info(datasets_root(), name)
-        if info is not None:
-            return info
         try:
-            return build_remote_dataset_info(name)
+            dataset = await asyncio.to_thread(_catalog.resolve_dataset, dataset_id)
         except Exception as exc:
-            raise HTTPException(status_code=404, detail=f"Dataset '{name}' not found: {exc}") from exc
+            raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found: {exc}") from exc
+        return dataset.to_dict()
 
     # -----------------------------------------------------------------------
     # Workflow state

@@ -37,6 +37,9 @@ if "roboclaw.embodied.embodiment.doctor" not in sys.modules:
     sys.modules["roboclaw.embodied.embodiment.doctor"] = doctor_mod
 
 from roboclaw.embodied.embodiment.lock import EmbodimentFileLock
+from roboclaw.embodied.embodiment.hardware.monitor import ArmStatus, CameraStatus
+from roboclaw.embodied.embodiment.interface.serial import SerialInterface
+from roboclaw.embodied.embodiment.interface.video import VideoInterface
 from roboclaw.embodied.embodiment.manifest import Manifest
 from roboclaw.embodied.service import EmbodiedService
 
@@ -46,8 +49,8 @@ _MANIFEST_DATA = {
     "arms": [],
     "hands": [],
     "cameras": [],
-    "datasets": {"root": "/tmp/datasets"},
-    "policies": {"root": "/tmp/policies"},
+    "datasets": {"root": ""},
+    "policies": {"root": ""},
 }
 
 
@@ -103,21 +106,65 @@ class FailingSession:
 
 
 def _make_service(tmp_path: Path) -> EmbodiedService:
+    manifest_data = {
+        **_MANIFEST_DATA,
+        "datasets": {"root": str(tmp_path / "datasets")},
+        "policies": {"root": str(tmp_path / "policies")},
+    }
     manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(json.dumps(_MANIFEST_DATA), encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest_data), encoding="utf-8")
     manifest = Manifest(path=manifest_path)
     service = EmbodiedService(manifest=manifest)
     service._file_lock = EmbodimentFileLock(path=tmp_path / ".embodiment.lock")
     return service
 
 
+def _write_runtime_dataset(root: Path, name: str) -> None:
+    dataset_path = root / "local" / name / "meta"
+    dataset_path.mkdir(parents=True, exist_ok=True)
+    (dataset_path / "info.json").write_text(
+        json.dumps({"total_episodes": 1, "total_frames": 2, "fps": 30}),
+        encoding="utf-8",
+    )
+
+
+def _single_follower_status() -> list[ArmStatus]:
+    return [ArmStatus("follower", "so101_follower", "follower", True, True)]
+
+
+def _teleop_arm_statuses() -> list[ArmStatus]:
+    return [
+        ArmStatus("follower", "so101_follower", "follower", True, True),
+        ArmStatus("leader", "so101_leader", "leader", True, True),
+    ]
+
+
+def _bind_replay_setup(service: EmbodiedService) -> None:
+    service.bind_arm("follower", "so101_follower", SerialInterface(dev="/tmp/follower"))
+
+
+def _bind_teleop_setup(service: EmbodiedService) -> None:
+    _bind_replay_setup(service)
+    service.bind_arm("leader", "so101_leader", SerialInterface(dev="/tmp/leader"))
+
+
+def _bind_infer_setup(service: EmbodiedService) -> None:
+    _bind_replay_setup(service)
+    service.bind_camera("wrist", VideoInterface(dev="/tmp/wrist"))
+
+
 @pytest.mark.asyncio
 async def test_run_replay_waits_for_process_completion_without_tty(tmp_path: Path) -> None:
     service = _make_service(tmp_path)
+    _bind_replay_setup(service)
+    _write_runtime_dataset(tmp_path / "datasets", "demo")
     service.replay = ControlledSession(service.board, "Replay finished.")
     run_replay = getattr(service, "run_replay")
 
-    with patch("roboclaw.embodied.service.CommandBuilder.replay", return_value=["replay-cmd"]):
+    with patch("roboclaw.embodied.service.check_arm_status", side_effect=_single_follower_status()), patch(
+        "roboclaw.embodied.service.CommandBuilder.replay",
+        return_value=["replay-cmd"],
+    ):
         task = asyncio.create_task(run_replay(dataset_name="demo", episode=2, fps=15))
         await asyncio.wait_for(service.replay.started.wait(), timeout=1)
 
@@ -138,10 +185,14 @@ async def test_run_replay_waits_for_process_completion_without_tty(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_run_inference_waits_for_process_completion_without_tty(tmp_path: Path) -> None:
     service = _make_service(tmp_path)
+    _bind_infer_setup(service)
     service.infer = ControlledSession(service.board, "Inference finished.")
     run_inference = getattr(service, "run_inference")
 
-    with patch("roboclaw.embodied.service.CommandBuilder.infer", return_value=["infer-cmd"]):
+    with patch("roboclaw.embodied.service.check_arm_status", side_effect=_single_follower_status()), patch(
+        "roboclaw.embodied.service.check_camera_status",
+        return_value=CameraStatus("wrist", True, 640, 480),
+    ), patch("roboclaw.embodied.service.CommandBuilder.infer", return_value=["infer-cmd"]):
         task = asyncio.create_task(run_inference(checkpoint_path="/models/act", num_episodes=3))
         await asyncio.wait_for(service.infer.started.wait(), timeout=1)
 
@@ -162,9 +213,13 @@ async def test_run_inference_waits_for_process_completion_without_tty(tmp_path: 
 @pytest.mark.asyncio
 async def test_start_teleop_releases_lock_on_session_start_failure(tmp_path: Path) -> None:
     service = _make_service(tmp_path)
+    _bind_teleop_setup(service)
     service.teleop = FailingSession()
 
-    with patch("roboclaw.embodied.service.CommandBuilder.teleop", return_value=["teleop-cmd"]):
+    with patch("roboclaw.embodied.service.check_arm_status", side_effect=_teleop_arm_statuses()), patch(
+        "roboclaw.embodied.service.CommandBuilder.teleop",
+        return_value=["teleop-cmd"],
+    ):
         with pytest.raises(RuntimeError, match="boom"):
             await service.start_teleop(fps=20)
 
@@ -176,12 +231,14 @@ async def test_start_teleop_releases_lock_on_session_start_failure(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_start_recording_releases_lock_on_session_start_failure(tmp_path: Path) -> None:
     service = _make_service(tmp_path)
+    _bind_infer_setup(service)
+    service.bind_arm("leader", "so101_leader", SerialInterface(dev="/tmp/leader"))
     service.record = FailingSession()
 
-    with patch(
-        "roboclaw.embodied.service.CommandBuilder.record",
-        return_value=(["record-cmd"], "demo"),
-    ):
+    with patch("roboclaw.embodied.service.check_arm_status", side_effect=_teleop_arm_statuses()), patch(
+        "roboclaw.embodied.service.check_camera_status",
+        return_value=CameraStatus("wrist", True, 640, 480),
+    ), patch("roboclaw.embodied.service.CommandBuilder.record", return_value=["record-cmd"]):
         with pytest.raises(RuntimeError, match="boom"):
             await service.start_recording(task="pick", dataset_name="demo")
 
@@ -193,9 +250,14 @@ async def test_start_recording_releases_lock_on_session_start_failure(tmp_path: 
 @pytest.mark.asyncio
 async def test_start_replay_releases_lock_on_session_start_failure(tmp_path: Path) -> None:
     service = _make_service(tmp_path)
+    _bind_replay_setup(service)
+    _write_runtime_dataset(tmp_path / "datasets", "demo")
     service.replay = FailingSession()
 
-    with patch("roboclaw.embodied.service.CommandBuilder.replay", return_value=["replay-cmd"]):
+    with patch("roboclaw.embodied.service.check_arm_status", side_effect=_single_follower_status()), patch(
+        "roboclaw.embodied.service.CommandBuilder.replay",
+        return_value=["replay-cmd"],
+    ):
         with pytest.raises(RuntimeError, match="boom"):
             await service.start_replay(dataset_name="demo")
 
@@ -207,9 +269,13 @@ async def test_start_replay_releases_lock_on_session_start_failure(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_start_inference_releases_lock_on_session_start_failure(tmp_path: Path) -> None:
     service = _make_service(tmp_path)
+    _bind_infer_setup(service)
     service.infer = FailingSession()
 
-    with patch("roboclaw.embodied.service.CommandBuilder.infer", return_value=["infer-cmd"]):
+    with patch("roboclaw.embodied.service.check_arm_status", side_effect=_single_follower_status()), patch(
+        "roboclaw.embodied.service.check_camera_status",
+        return_value=CameraStatus("wrist", True, 640, 480),
+    ), patch("roboclaw.embodied.service.CommandBuilder.infer", return_value=["infer-cmd"]):
         with pytest.raises(RuntimeError, match="boom"):
             await service.start_inference(checkpoint_path="/models/act")
 

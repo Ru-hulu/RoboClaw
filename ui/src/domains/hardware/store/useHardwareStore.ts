@@ -19,12 +19,27 @@ export interface CameraStatus {
   height: number
 }
 
+export interface OperationCapability {
+  ready: boolean
+  missing: string[]
+}
+
+export interface HardwareCapabilities {
+  teleop: OperationCapability
+  record: OperationCapability
+  record_without_cameras: OperationCapability
+  replay: OperationCapability
+  infer: OperationCapability
+  infer_without_cameras: OperationCapability
+}
+
 export interface HardwareStatus {
   ready: boolean
   missing: string[]
   arms: ArmStatus[]
   cameras: CameraStatus[]
   session_busy: boolean
+  capabilities: HardwareCapabilities
 }
 
 export interface Fault {

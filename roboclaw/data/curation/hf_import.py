@@ -10,7 +10,7 @@ from typing import Any
 from huggingface_hub import snapshot_download
 from loguru import logger
 
-from roboclaw.data.datasets import datasets_root
+from roboclaw.data.curation.paths import datasets_root
 
 
 # ---------------------------------------------------------------------------

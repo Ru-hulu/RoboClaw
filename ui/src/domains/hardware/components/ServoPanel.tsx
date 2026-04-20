@@ -123,7 +123,12 @@ export function ServoPanel({ state }: { state: SessionState }) {
   const { t } = useI18n()
   const [histories, setHistories] = useState<Record<string, ServoHistory>>({})
   const [temperatures, setTemperatures] = useState<Record<string, Record<string, number>>>({})
-  const busy = state === 'teleoperating' || state === 'recording' || state === 'preparing' || state === 'inferring' || state === 'replaying'
+  const busy = state === 'teleoperating'
+    || state === 'recording'
+    || state === 'preparing'
+    || state === 'inferring'
+    || state === 'replaying'
+    || state === 'stopping'
 
   const poll = useCallback(async () => {
     if (busy) return

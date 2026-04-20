@@ -20,7 +20,7 @@ export default function DatasetWorkbenchHeader() {
     if (datasetsLoading || selectedDataset || datasets.length !== 1) {
       return
     }
-    void selectDataset(datasets[0].name)
+    void selectDataset(datasets[0].id)
   }, [datasets, datasetsLoading, selectedDataset, selectDataset])
 
   async function handleImport(): Promise<void> {
@@ -56,8 +56,8 @@ export default function DatasetWorkbenchHeader() {
               {datasetsLoading ? t('running') : t('selectDataset')}
             </option>
             {datasets.map((dataset) => (
-              <option key={dataset.name} value={dataset.name}>
-                {dataset.name}
+              <option key={dataset.id} value={dataset.id}>
+                {dataset.label}
               </option>
             ))}
           </select>

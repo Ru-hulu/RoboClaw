@@ -7,7 +7,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from roboclaw.embodied.board import Board, Command, EpisodePhase, OutputConsumer, SessionState
-from roboclaw.embodied.command import CommandBuilder, validate_dataset_name
+from roboclaw.embodied.command import CommandBuilder
 from roboclaw.embodied.service.session.base import Session
 
 if TYPE_CHECKING:
@@ -86,14 +86,20 @@ class RecordSession(Session):
         kwargs: dict[str, Any],
         tty_handoff: Any,
     ) -> str:
-        dataset_name = kwargs.get("dataset_name")
-        if dataset_name:
-            validate_dataset_name(dataset_name)
         self._kwargs = kwargs
         if tty_handoff:
             self._parent.acquire_embodiment("recording")
             try:
-                argv, self._dataset_name = CommandBuilder.record(manifest, **self._record_kwargs(kwargs))
+                dataset = self._parent.datasets.prepare_recording_dataset(
+                    kwargs.get("dataset_name", ""),
+                    prefix="rec",
+                )
+                argv = CommandBuilder.record(
+                    manifest,
+                    dataset=dataset.runtime,
+                    **self._record_kwargs(kwargs),
+                )
+                self._dataset_name = dataset.runtime.name
                 await self.start(argv)
                 await self.board.update(
                     target_episodes=kwargs.get("num_episodes", 10),
@@ -111,7 +117,7 @@ class RecordSession(Session):
         return {
             k: v
             for k, v in kwargs.items()
-            if k in ("task", "dataset_name", "num_episodes", "fps",
+            if k in ("task", "num_episodes", "fps",
                      "episode_time_s", "reset_time_s", "arms", "use_cameras")
         }
 

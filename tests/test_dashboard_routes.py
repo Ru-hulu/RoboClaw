@@ -9,7 +9,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from roboclaw.embodied.embodiment.hardware.monitor import ArmStatus, CameraStatus
 from roboclaw.embodied.service import EmbodiedService
+from roboclaw.embodied.embodiment.interface.serial import SerialInterface
 from roboclaw.embodied.embodiment.interface.video import VideoInterface
 from roboclaw.http.routes import hardware as hardware_routes
 from roboclaw.http.routes import register_all_routes
@@ -19,6 +21,9 @@ from roboclaw.http.routes import register_all_routes
 def isolated_roboclaw_home(tmp_path):
     with patch(
         "roboclaw.embodied.embodiment.lock.get_roboclaw_home",
+        return_value=tmp_path,
+    ), patch(
+        "roboclaw.embodied.embodiment.manifest.helpers.get_roboclaw_home",
         return_value=tmp_path,
     ):
         yield
@@ -111,6 +116,50 @@ class TestHardwareStatus:
         assert "ready" in data
         assert "arms" in data
         assert "cameras" in data
+        assert "capabilities" in data
+
+    def test_capabilities_allow_replay_when_camera_is_disconnected(self, client, app):
+        service = app.state.embodied_service
+        service.bind_arm("follower", "so101_follower", SerialInterface(dev="/tmp/follower"))
+        service.bind_arm("leader", "so101_leader", SerialInterface(dev="/tmp/leader"))
+        service.bind_camera("wrist", VideoInterface(dev="/tmp/wrist"))
+
+        with patch("roboclaw.embodied.service.check_arm_status") as arm_status, patch(
+            "roboclaw.embodied.service.check_camera_status",
+        ) as camera_status:
+            arm_status.side_effect = [
+                ArmStatus("follower", "so101_follower", "follower", True, True),
+                ArmStatus("leader", "so101_leader", "leader", True, True),
+            ]
+            camera_status.return_value = CameraStatus("wrist", False, 640, 480)
+            resp = client.get("/api/hardware/status")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ready"] is False
+        assert data["capabilities"]["teleop"]["ready"] is True
+        assert data["capabilities"]["record"]["ready"] is False
+        assert data["capabilities"]["record_without_cameras"]["ready"] is True
+        assert data["capabilities"]["replay"]["ready"] is True
+        assert data["capabilities"]["infer"]["ready"] is False
+
+    def test_record_start_returns_400_when_cameras_are_required(self, client, app):
+        service = app.state.embodied_service
+        service.bind_arm("follower", "so101_follower", SerialInterface(dev="/tmp/follower"))
+        service.bind_arm("leader", "so101_leader", SerialInterface(dev="/tmp/leader"))
+
+        with patch("roboclaw.embodied.service.check_arm_status") as arm_status:
+            arm_status.side_effect = [
+                ArmStatus("follower", "so101_follower", "follower", True, True),
+                ArmStatus("leader", "so101_leader", "leader", True, True),
+            ]
+            resp = client.post(
+                "/api/record/start",
+                json={"task": "pick", "num_episodes": 1, "episode_time_s": 10, "reset_time_s": 1},
+            )
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "No cameras configured"
 
     def test_hardware_previews_return_alias_keyed_urls(self, client, app):
         app.state.embodied_service.bind_camera("top", VideoInterface(dev="/dev/video0"))
@@ -165,7 +214,7 @@ class TestDatasets:
 
     def test_delete_nonexistent(self, client):
         resp = client.delete("/api/datasets/nope")
-        assert resp.status_code == 500
+        assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------

@@ -1,18 +1,8 @@
 import { create } from 'zustand'
+import type { DatasetImportJob, DatasetRef } from '@/domains/datasets/types'
 
 type StageStatus = 'idle' | 'running' | 'paused' | 'completed' | 'error'
 const CURRENT_DATASET_KEY = 'roboclaw.current_dataset'
-
-export interface DatasetSummary {
-  name: string
-  total_episodes: number
-  total_frames: number
-  fps: number
-  robot_type: string
-  episode_lengths?: number[]
-  features?: string[]
-  source_dataset?: string
-}
 
 export interface StageState {
   status: StageStatus
@@ -103,16 +93,6 @@ export interface PropagationResults {
   published_parquet_path?: string
 }
 
-export interface DatasetImportJob {
-  job_id: string
-  dataset_id: string
-  status: 'queued' | 'running' | 'completed' | 'error'
-  include_videos: boolean
-  message: string
-  imported_dataset?: string | null
-  local_path?: string | null
-}
-
 export interface AnnotationItem {
   id: string
   label: string
@@ -196,10 +176,10 @@ export interface AnnotationWorkspacePayload {
 }
 
 interface WorkflowStore {
-  datasets: DatasetSummary[]
+  datasets: DatasetRef[]
   datasetsLoading: boolean
   selectedDataset: string | null
-  datasetInfo: DatasetSummary | null
+  datasetInfo: DatasetRef | null
   workflowState: WorkflowState | null
   selectedValidators: string[]
   qualityThresholds: Record<string, number>
@@ -211,7 +191,7 @@ interface WorkflowStore {
   datasetImportJob: DatasetImportJob | null
   pollInterval: ReturnType<typeof setInterval> | null
   loadDatasets: () => Promise<void>
-  selectDataset: (name: string) => Promise<void>
+  selectDataset: (datasetId: string) => Promise<void>
   importDatasetFromHf: (datasetId: string, includeVideos?: boolean) => Promise<void>
   toggleValidator: (name: string) => void
   setQualityThreshold: (key: string, value: number) => void
@@ -364,32 +344,32 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
   loadDatasets: async () => {
     set({ datasetsLoading: true })
     try {
-      const datasets = await fetchJson<DatasetSummary[]>('/api/curation/datasets')
+      const datasets = await fetchJson<DatasetRef[]>('/api/curation/datasets')
       set({ datasets })
     } finally {
       set({ datasetsLoading: false })
     }
   },
 
-  selectDataset: async (name: string) => {
-    persistDataset(name)
+  selectDataset: async (datasetId: string) => {
+    persistDataset(datasetId)
     set({
-      selectedDataset: name,
+      selectedDataset: datasetId,
       datasetInfo: null,
       workflowState: null,
       qualityResults: null,
       prototypeResults: null,
       propagationResults: null,
     })
-    const info = await fetchJson<DatasetSummary>(
-      `/api/curation/datasets/${encodeURIComponent(name)}`,
+    const info = await fetchJson<DatasetRef>(
+      `/api/curation/datasets/${encodeURIComponent(datasetId)}`,
     )
     set({ datasetInfo: info })
     await get().refreshState()
   },
 
   importDatasetFromHf: async (datasetId: string, includeVideos = true) => {
-    const payload = await fetchJson<{ job_id: string; status: string }>(
+    const payload = await fetchJson<DatasetImportJob>(
       '/api/curation/datasets/import-hf',
       {
         method: 'POST',
@@ -409,9 +389,9 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
       set({ datasetImportJob: job })
       if (job.status === 'completed') {
         await get().loadDatasets()
-        if (job.imported_dataset) {
-          persistDataset(job.imported_dataset)
-          await get().selectDataset(job.imported_dataset)
+        if (job.imported_dataset_id) {
+          persistDataset(job.imported_dataset_id)
+          await get().selectDataset(job.imported_dataset_id)
         }
         active = false
       } else if (job.status === 'error') {

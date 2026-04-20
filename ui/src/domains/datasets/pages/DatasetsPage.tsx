@@ -22,6 +22,7 @@ export default function DatasetsPage() {
   const pushPolicy = useHubTransferStore((state) => state.pushPolicy)
   const pullPolicy = useHubTransferStore((state) => state.pullPolicy)
   const { t } = useI18n()
+  const runtimeDatasets = datasets.filter((dataset) => dataset.capabilities.can_train && dataset.runtime)
 
   const [trainDataset, setTrainDataset] = useState('')
   const [trainSteps, setTrainSteps] = useState(100000)
@@ -36,14 +37,14 @@ export default function DatasetsPage() {
     void loadPolicies()
   }, [loadDatasets, loadPolicies])
 
-  const promptPush = (type: 'dataset' | 'policy', name: string) => {
+  const promptPush = (type: 'dataset' | 'policy', value: string) => {
     const repoId = prompt(t('enterRepoId'))
     if (!repoId) return
     if (type === 'dataset') {
-      void pushDataset(name, repoId)
+      void pushDataset(value, repoId)
       return
     }
-    void pushPolicy(name, repoId)
+    void pushPolicy(value, repoId)
   }
 
   return (
@@ -71,25 +72,25 @@ export default function DatasetsPage() {
           <div className="space-y-1.5">
             {datasets.map((d) => (
               <div
-                key={d.name}
+                key={d.id}
                 className="bg-bg border border-bd/30 rounded-lg px-3 py-2.5 flex items-center gap-2 text-sm"
               >
-                <span className="flex-1 font-semibold text-tx truncate">{d.name}</span>
+                <span className="flex-1 font-semibold text-tx truncate">{d.label}</span>
                 <span className="text-tx3 text-2xs font-mono whitespace-nowrap">
-                  {d.total_episodes != null ? `${d.total_episodes} ep` : ''}
-                  {d.total_frames != null ? ` · ${d.total_frames} fr` : ''}
+                  {`${d.stats.total_episodes} ep`}
+                  {` · ${d.stats.total_frames} fr`}
                 </span>
                 <button
-                  disabled={!!hubLoading}
-                  onClick={() => promptPush('dataset', d.name)}
+                  disabled={!!hubLoading || !d.capabilities.can_push}
+                  onClick={() => promptPush('dataset', d.id)}
                   className="px-2 py-0.5 text-ac/60 rounded text-xs hover:text-ac hover:bg-ac/10 transition-colors disabled:opacity-25"
                 >
                   {t('pushToHub')}
                 </button>
                 <button
                   onClick={() => {
-                    if (confirm(`${t('deleteConfirm')} "${d.name}"?`)) {
-                      void deleteDataset(d.name)
+                    if (confirm(`${t('deleteConfirm')} "${d.label}"?`)) {
+                      void deleteDataset(d.id)
                     }
                   }}
                   className="px-2 py-0.5 text-rd/60 rounded text-xs hover:text-rd hover:bg-rd/10 transition-colors"
@@ -160,8 +161,8 @@ export default function DatasetsPage() {
                 focus:outline-none focus:border-ac"
             >
               <option value="">{t('selectDataset')}</option>
-              {datasets.map(d => (
-                <option key={d.name} value={d.name}>{d.name}</option>
+              {runtimeDatasets.map(d => (
+                <option key={d.id} value={d.runtime!.name}>{d.label}</option>
               ))}
             </select>
             <div className="flex gap-3 mb-3">

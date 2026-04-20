@@ -8,7 +8,7 @@ from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from roboclaw.embodied.command import CommandBuilder, logs_dir, validate_dataset_name
+from roboclaw.embodied.command import CommandBuilder, logs_dir
 
 if TYPE_CHECKING:
     from roboclaw.embodied.embodiment.manifest import Manifest
@@ -33,10 +33,10 @@ class TrainSession:
         from roboclaw.embodied.executor import SubprocessExecutor
 
         dataset_name = kwargs.get("dataset_name", "default")
-        validate_dataset_name(dataset_name)
+        dataset = self._parent.datasets.resolve_runtime_dataset(dataset_name)
         argv = CommandBuilder.train(
             manifest,
-            dataset_name=dataset_name,
+            dataset=dataset.runtime,
             steps=kwargs.get("steps", 100_000),
             device=kwargs.get("device", "cuda"),
         )
@@ -84,13 +84,11 @@ class TrainSession:
     # ── Listing utilities ────────────────────────────────────────────────
 
     def list_datasets(self, manifest: Manifest | None = None) -> str:
-        if manifest is None:
-            manifest = self._parent.manifest
-            manifest.ensure()
-        root = Path(manifest.snapshot.get("datasets", {}).get("root", "")) / "local"
-        if not root.exists():
-            return "No datasets found."
-        datasets = _scan_datasets(root)
+        datasets = [
+            ref.to_dict()
+            for ref in self._parent.datasets.list_local_datasets()
+            if ref.capabilities.can_train
+        ]
         if not datasets:
             return "No datasets found."
         return json.dumps(datasets, indent=2, ensure_ascii=False)
@@ -106,27 +104,6 @@ class TrainSession:
         if not policies:
             return "No policies found."
         return json.dumps(policies, indent=2, ensure_ascii=False)
-
-
-# ── Private scanning helpers ─────────────────────────────────────────────
-
-
-def _scan_datasets(root: Path) -> list[dict[str, Any]]:
-    """Scan dataset directories under *root* and return summary dicts."""
-    datasets: list[dict[str, Any]] = []
-    for dataset_dir in sorted(root.iterdir()):
-        info_path = dataset_dir / "meta" / "info.json"
-        if not info_path.exists():
-            continue
-        info = json.loads(info_path.read_text())
-        datasets.append({
-            "name": dataset_dir.name,
-            "episodes": info.get("total_episodes", 0),
-            "frames": info.get("total_frames", 0),
-            "fps": info.get("fps", 0),
-        })
-    return datasets
-
 
 def _scan_policies(root: Path) -> list[dict[str, Any]]:
     """Scan policy directories under *root* and return summary dicts."""

@@ -50,7 +50,10 @@ def register_session_routes(app: FastAPI, service: EmbodiedService) -> None:
     async def teleop_start(body: TeleopStartRequest | None = None) -> dict[str, str]:
         fps = body.fps if body else 30
         arms = body.arms if body else ""
-        await service.start_teleop(fps=fps, arms=arms)
+        try:
+            await service.start_teleop(fps=fps, arms=arms)
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
         return {"status": "teleoperating"}
 
     @app.post("/api/teleop/stop")
@@ -60,16 +63,19 @@ def register_session_routes(app: FastAPI, service: EmbodiedService) -> None:
 
     @app.post("/api/record/start")
     async def record_start(body: RecordStartRequest) -> dict[str, Any]:
-        dataset_name = await service.start_recording(
-            task=body.task,
-            num_episodes=body.num_episodes,
-            fps=body.fps,
-            episode_time_s=body.episode_time_s,
-            reset_time_s=body.reset_time_s,
-            dataset_name=body.dataset_name,
-            use_cameras=body.use_cameras,
-            arms=body.arms,
-        )
+        try:
+            dataset_name = await service.start_recording(
+                task=body.task,
+                num_episodes=body.num_episodes,
+                fps=body.fps,
+                episode_time_s=body.episode_time_s,
+                reset_time_s=body.reset_time_s,
+                dataset_name=body.dataset_name,
+                use_cameras=body.use_cameras,
+                arms=body.arms,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
         return {"status": "recording", "dataset_name": dataset_name}
 
     @app.post("/api/record/stop")

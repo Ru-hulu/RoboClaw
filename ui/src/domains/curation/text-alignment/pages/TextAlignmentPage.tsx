@@ -56,10 +56,10 @@ export default function TextAlignmentView() {
 
       {selectedDataset && datasetInfo ? (
         <div className="workflow-view__info-bar">
-          <span>{datasetInfo.name}</span>
-          <span>{datasetInfo.total_episodes} {t('episodes')}</span>
-          <span>{datasetInfo.fps} fps</span>
-          <span>{datasetInfo.robot_type}</span>
+          <span>{datasetInfo.label}</span>
+          <span>{datasetInfo.stats.total_episodes} {t('episodes')}</span>
+          <span>{datasetInfo.stats.fps} fps</span>
+          <span>{datasetInfo.stats.robot_type}</span>
         </div>
       ) : (
         <GlassPanel className="quality-view__empty">

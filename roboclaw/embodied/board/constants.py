@@ -11,6 +11,7 @@ class SessionState(StrEnum):
     RECORDING = "recording"
     REPLAYING = "replaying"
     INFERRING = "inferring"
+    STOPPING = "stopping"
     ERROR = "error"
 
 

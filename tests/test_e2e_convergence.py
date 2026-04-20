@@ -10,6 +10,7 @@ Proves three things:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -61,14 +62,14 @@ def service(tmp_path, monkeypatch):
     manifest_path.write_text(json.dumps(MOCK_SETUP, indent=2), encoding="utf-8")
     manifest = Manifest(path=manifest_path)
 
-    _original_exists = Path.exists
+    original_exists = os.path.exists
 
-    def _mock_exists(self):
-        if str(self).startswith("/dev/"):
+    def mock_exists(path):
+        if str(path).startswith("/dev/"):
             return True
-        return _original_exists(self)
+        return original_exists(path)
 
-    monkeypatch.setattr(Path, "exists", _mock_exists)
+    monkeypatch.setattr(os.path, "exists", mock_exists)
 
     return EmbodiedService(manifest=manifest)
 

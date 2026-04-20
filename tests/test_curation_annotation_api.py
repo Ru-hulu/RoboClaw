@@ -12,7 +12,6 @@ from fastapi.testclient import TestClient
 
 from roboclaw.http.routes import curation as curation_routes
 from roboclaw.data.curation import exports as curation_exports
-from roboclaw.data.curation import hf_import as curation_hf_import
 from roboclaw.data.curation import serializers as curation_serializers
 from roboclaw.data.curation import service as curation_service
 from roboclaw.data.curation.state import (
@@ -68,11 +67,6 @@ def _build_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Test
         curation_routes,
         "datasets_root",
         lambda: dataset_root,
-    )
-    monkeypatch.setattr(
-        curation_routes,
-        "resolve_dataset_path",
-        lambda name: (dataset_root / name).resolve(),
     )
     monkeypatch.setattr(
         curation_serializers,
@@ -483,11 +477,6 @@ def test_workflow_datasets_preserve_nested_hf_names(
         "datasets_root",
         lambda: dataset_root,
     )
-    monkeypatch.setattr(
-        curation_routes,
-        "resolve_dataset_path",
-        lambda name: (dataset_root / name).resolve(),
-    )
     app = FastAPI()
     curation_routes.register_curation_routes(app)
     client = TestClient(app)
@@ -495,12 +484,13 @@ def test_workflow_datasets_preserve_nested_hf_names(
     response = client.get("/api/curation/datasets")
     assert response.status_code == 200
     payload = response.json()
-    assert payload[0]["name"] == "cadene/droid_1.0.1"
+    assert payload[0]["id"] == "cadene/droid_1.0.1"
+    assert payload[0]["label"] == "cadene/droid_1.0.1"
 
     # Detail route must handle the nested name with slash
     detail = client.get("/api/curation/datasets/cadene/droid_1.0.1")
     assert detail.status_code == 200
-    assert detail.json()["name"] == "cadene/droid_1.0.1"
+    assert detail.json()["id"] == "cadene/droid_1.0.1"
 
 
 def test_resolve_dataset_path_rejects_traversal(
@@ -541,22 +531,12 @@ def test_workflow_import_hf_dataset_job(
         )
         return str(target_dir)
 
-    monkeypatch.setattr(curation_hf_import, "snapshot_download", _fake_snapshot_download)
-    monkeypatch.setattr(
-        curation_hf_import,
-        "datasets_root",
-        lambda: dataset_root,
-    )
     monkeypatch.setattr(
         curation_routes,
         "datasets_root",
         lambda: dataset_root,
     )
-    monkeypatch.setattr(
-        curation_routes,
-        "resolve_dataset_path",
-        lambda name: (dataset_root / name).resolve(),
-    )
+    monkeypatch.setattr("huggingface_hub.snapshot_download", _fake_snapshot_download)
     app = FastAPI()
     curation_routes.register_curation_routes(app)
     client = TestClient(app)
@@ -579,7 +559,7 @@ def test_workflow_import_hf_dataset_job(
 
     assert final_payload is not None
     assert final_payload["status"] == "completed"
-    assert final_payload["imported_dataset"] == "cadene/droid_1.0.1"
+    assert final_payload["imported_dataset_id"] == "cadene/droid_1.0.1"
 
 
 def test_workflow_dataset_detail_uses_remote_dataset_info(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -588,13 +568,7 @@ def test_workflow_dataset_detail_uses_remote_dataset_info(monkeypatch: pytest.Mo
     client = TestClient(app)
 
     monkeypatch.setattr(
-        curation_routes,
-        "get_dataset_info",
-        lambda _root, _name: None,
-    )
-    monkeypatch.setattr(
-        curation_routes,
-        "build_remote_dataset_info",
+        "roboclaw.data.explorer.remote.build_remote_dataset_info",
         lambda dataset: {
             "name": dataset,
             "total_episodes": 2,
@@ -610,5 +584,6 @@ def test_workflow_dataset_detail_uses_remote_dataset_info(monkeypatch: pytest.Mo
     response = client.get("/api/curation/datasets/cadene/droid_1.0.1")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["name"] == "cadene/droid_1.0.1"
-    assert payload["total_episodes"] == 2
+    assert payload["id"] == "cadene/droid_1.0.1"
+    assert payload["kind"] == "remote"
+    assert payload["stats"]["total_episodes"] == 2

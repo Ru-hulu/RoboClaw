@@ -313,7 +313,16 @@ async def test_train_action(tmp_path: Path) -> None:
     tool = _find_tool(create_embodied_tools(), "train")
     mock_runner = AsyncMock()
     mock_runner.run_detached.return_value = "job-abc-123"
-    manifest = _manifest_from_data(tmp_path, _MOCK_SETUP)
+    data = copy.deepcopy(_MOCK_SETUP)
+    data["datasets"]["root"] = str(tmp_path / "datasets")
+    data["policies"]["root"] = str(tmp_path / "policies")
+    dataset_meta = tmp_path / "datasets" / "local" / "test" / "meta"
+    dataset_meta.mkdir(parents=True)
+    (dataset_meta / "info.json").write_text(
+        json.dumps({"total_episodes": 1, "total_frames": 2, "fps": 30}),
+        encoding="utf-8",
+    )
+    manifest = _manifest_from_data(tmp_path, data)
     from roboclaw.embodied.service import EmbodiedService
     tool.embodied_service = EmbodiedService(manifest=manifest)
 

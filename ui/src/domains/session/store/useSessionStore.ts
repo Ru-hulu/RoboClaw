@@ -15,9 +15,19 @@ export type SessionState =
   | 'recording'
   | 'replaying'
   | 'inferring'
+  | 'stopping'
   | 'error'
 
-export type EpisodePhase = '' | 'recording' | 'saving' | 'resetting'
+export type EpisodePhase = '' | 'recording' | 'saving' | 'resetting' | 'stopping' | 'discarding'
+export type SessionLoading =
+  | 'teleop'
+  | 'teleop-stop'
+  | 'record'
+  | 'record-stop'
+  | 'replay'
+  | 'replay-stop'
+  | 'infer'
+  | 'infer-stop'
 
 export interface SessionStatus {
   state: SessionState
@@ -50,7 +60,7 @@ export interface StartRecordingParams {
 
 interface SessionStore {
   session: SessionStatus
-  loading: string | null
+  loading: SessionLoading | null
   doDismissError: () => Promise<void>
   fetchSessionStatus: () => Promise<void>
   doTeleopStart: (params?: { fps?: number; arms?: string }) => Promise<void>
@@ -89,7 +99,7 @@ const defaultSession: SessionStatus = {
   prepare_stage: '',
 }
 
-export const useSessionStore = create<SessionStore>((set) => ({
+export const useSessionStore = create<SessionStore>((set, get) => ({
   session: { ...defaultSession },
   loading: null,
 
@@ -112,7 +122,16 @@ export const useSessionStore = create<SessionStore>((set) => ({
   },
 
   doTeleopStop: async () => {
-    await postJson(`${TELEOP}/stop`)
+    set({ loading: 'teleop-stop' })
+    try {
+      await postJson(`${TELEOP}/stop`)
+    } finally {
+      try {
+        await get().fetchSessionStatus()
+      } finally {
+        set({ loading: null })
+      }
+    }
   },
 
   doRecordStart: async (params) => {
@@ -125,7 +144,16 @@ export const useSessionStore = create<SessionStore>((set) => ({
   },
 
   doRecordStop: async () => {
-    await postJson(`${RECORD}/stop`)
+    set({ loading: 'record-stop' })
+    try {
+      await postJson(`${RECORD}/stop`)
+    } finally {
+      try {
+        await get().fetchSessionStatus()
+      } finally {
+        set({ loading: null })
+      }
+    }
   },
 
   doSaveEpisode: async () => {
@@ -150,7 +178,16 @@ export const useSessionStore = create<SessionStore>((set) => ({
   },
 
   doReplayStop: async () => {
-    await postJson(`${REPLAY}/stop`)
+    set({ loading: 'replay-stop' })
+    try {
+      await postJson(`${REPLAY}/stop`)
+    } finally {
+      try {
+        await get().fetchSessionStatus()
+      } finally {
+        set({ loading: null })
+      }
+    }
   },
 
   doInferStart: async (params) => {
@@ -163,7 +200,16 @@ export const useSessionStore = create<SessionStore>((set) => ({
   },
 
   doInferStop: async () => {
-    await postJson(`${INFER}/stop`)
+    set({ loading: 'infer-stop' })
+    try {
+      await postJson(`${INFER}/stop`)
+    } finally {
+      try {
+        await get().fetchSessionStatus()
+      } finally {
+        set({ loading: null })
+      }
+    }
   },
 
   handleDashboardEvent: (event) => {
