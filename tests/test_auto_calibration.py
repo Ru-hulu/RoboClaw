@@ -168,16 +168,19 @@ def test_calibrator_happy_path_prepares_all_motors_then_probes_and_applies() -> 
         calibrator = _SO101AutoCalibrator("/tmp/tty.so101")
         with patch.object(
             calibrator, "_prepare_motor",
-            side_effect=lambda name, *_: call_order.append(f"prepare:{name}"),
+            side_effect=lambda name: call_order.append(f"prepare:{name}"),
         ), patch.object(
             calibrator, "_run_sequence",
-            side_effect=lambda: (call_order.append("run_sequence"), {name: (1000, 3000) for name in calibrator.ACTIVE_MOTORS})[1],
+            side_effect=lambda: call_order.append("run_sequence"),
         ), patch.object(
             calibrator, "_build_results",
-            side_effect=lambda hard, temp: (call_order.append("build"), results)[1],
+            side_effect=lambda: (call_order.append("build"), results)[1],
         ), patch.object(
             calibrator, "_apply_results",
             side_effect=lambda payload: call_order.append(f"apply:{len(payload)}"),
+        ), patch.object(
+            calibrator, "_move_to_final_pose",
+            side_effect=lambda: call_order.append("final_pose"),
         ):
             returned = calibrator.calibrate()
 
@@ -187,28 +190,21 @@ def test_calibrator_happy_path_prepares_all_motors_then_probes_and_applies() -> 
         "run_sequence",
         "build",
         "apply:6",
+        "final_pose",
     ]
 
 
-def test_calibrator_restores_orig_eeprom_and_initial_pose_on_failure() -> None:
+def test_calibrator_restores_orig_eeprom_on_failure() -> None:
     with patch("roboclaw.embodied.calibration.so101.auto.FeetechMotorsBus"):
         calibrator = _SO101AutoCalibrator("/tmp/tty.so101")
 
-        def fake_prepare(name, orig_limits, orig_homings, temp_homings, initial_actuals):
-            orig_limits[name] = (0, 4095)
-            orig_homings[name] = 0
-            temp_homings[name] = 0
-            initial_actuals[name] = 2048
-
-        with patch.object(calibrator, "_prepare_motor", side_effect=fake_prepare), patch.object(
+        with patch.object(calibrator, "_prepare_motor"), patch.object(
             calibrator, "_run_sequence", side_effect=AutoCalibrationStopped("stopped"),
         ), patch.object(calibrator, "_restore_via_fresh_bus") as restore:
             with pytest.raises(AutoCalibrationStopped):
                 calibrator.calibrate()
 
-    restore.assert_called_once()
-    # _restore_via_fresh_bus(orig_limits, orig_homings, initial_actuals) — 3rd arg is pose map
-    assert restore.call_args.args[2] == {name: 2048 for name in calibrator.ALL_MOTORS}
+    restore.assert_called_once_with()
 
 
 @pytest.mark.asyncio
