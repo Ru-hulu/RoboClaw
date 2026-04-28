@@ -6,10 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from roboclaw.embodied.command.headless_patch import (
-    apply_motor_read_retry_patch,
-    apply_record_loop_patch,
-)
+from roboclaw.embodied.command.headless_patch import apply_record_loop_patch
 from roboclaw.embodied.service import EmbodiedService
 
 
@@ -108,118 +105,6 @@ def test_record_loop_patch_requires_keyword_events() -> None:
 
     with pytest.raises(RuntimeError, match="keyword argument 'events'"):
         module.record_loop(object(), events, dataset=None)
-
-
-def test_present_position_sync_read_keeps_successful_reads_unchanged() -> None:
-    calls = []
-
-    class FakeSerialMotorsBus:
-        def sync_read(
-            self,
-            data_name: str,
-            motors=None,
-            *,
-            normalize: bool = True,
-            num_retry: int = 0,
-        ):
-            calls.append((data_name, motors, normalize, num_retry))
-            return {"ok": 1}
-
-    module = SimpleNamespace(SerialMotorsBus=FakeSerialMotorsBus)
-    apply_motor_read_retry_patch(module, min_retries=3)
-
-    bus = FakeSerialMotorsBus()
-    assert bus.sync_read("Present_Position", [1, 2], normalize=False) == {"ok": 1}
-    assert bus.sync_read("Present_Temperature", [1], num_retry=1) == {"ok": 1}
-    assert calls == [
-        ("Present_Position", [1, 2], False, 0),
-        ("Present_Temperature", [1], True, 1),
-    ]
-
-
-def test_present_position_sync_read_retries_after_initial_connection_error() -> None:
-    calls = []
-
-    class FakeSerialMotorsBus:
-        def sync_read(
-            self,
-            data_name: str,
-            motors=None,
-            *,
-            normalize: bool = True,
-            num_retry: int = 0,
-        ):
-            calls.append((data_name, motors, normalize, num_retry))
-            if len(calls) == 1:
-                raise ConnectionError("Failed to sync read 'Present_Position'. There is no status packet!")
-            return {"ok": 1}
-
-    module = SimpleNamespace(SerialMotorsBus=FakeSerialMotorsBus)
-    apply_motor_read_retry_patch(module, min_retries=3)
-
-    bus = FakeSerialMotorsBus()
-    assert bus.sync_read("Present_Position", [1, 2], normalize=False) == {"ok": 1}
-    assert calls == [
-        ("Present_Position", [1, 2], False, 0),
-        ("Present_Position", [1, 2], False, 3),
-    ]
-
-
-def test_present_position_sync_read_forwards_unknown_keywords_on_retry() -> None:
-    calls = []
-
-    class FakeSerialMotorsBus:
-        def sync_read(
-            self,
-            data_name: str,
-            motors=None,
-            *,
-            normalize: bool = True,
-            num_retry: int = 0,
-            timeout: float = 0.0,
-        ):
-            calls.append((data_name, motors, normalize, num_retry, timeout))
-            if len(calls) == 1:
-                raise ConnectionError("Failed to sync read 'Present_Position'. There is no status packet!")
-            return {"ok": 1}
-
-    module = SimpleNamespace(SerialMotorsBus=FakeSerialMotorsBus)
-    apply_motor_read_retry_patch(module, min_retries=3)
-
-    bus = FakeSerialMotorsBus()
-    assert bus.sync_read("Present_Position", [1, 2], normalize=False, timeout=1.5) == {"ok": 1}
-    assert calls == [
-        ("Present_Position", [1, 2], False, 0, 1.5),
-        ("Present_Position", [1, 2], False, 3, 1.5),
-    ]
-
-
-def test_present_position_sync_read_retries_by_context_not_message() -> None:
-    calls = []
-
-    class FakeSerialMotorsBus:
-        def sync_read(
-            self,
-            data_name: str,
-            motors=None,
-            *,
-            normalize: bool = True,
-            num_retry: int = 0,
-        ):
-            calls.append((data_name, motors, normalize, num_retry))
-            if len(calls) == 1:
-                raise ConnectionError("permission denied")
-            return {"ok": 1}
-
-    module = SimpleNamespace(SerialMotorsBus=FakeSerialMotorsBus)
-    apply_motor_read_retry_patch(module, min_retries=3)
-
-    bus = FakeSerialMotorsBus()
-    assert bus.sync_read("Present_Position", [1, 2], normalize=False) == {"ok": 1}
-    assert calls == [
-        ("Present_Position", [1, 2], False, 0),
-        ("Present_Position", [1, 2], False, 3),
-    ]
 
 
 def test_servo_positions_are_blocked_while_operation_is_busy(

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 import os
 import select
 import sys
@@ -142,35 +141,6 @@ def apply_headless_patch() -> None:
     control_utils.is_headless = lambda: not sys.stdin.isatty()
 
 
-def apply_motor_read_retry_patch(motors_bus_module: Any | None = None, min_retries: int = 3) -> None:
-    """Retry transient record-time position read failures before failing."""
-
-    if motors_bus_module is None:
-        import lerobot.motors.motors_bus as motors_bus_module
-
-    bus_cls = motors_bus_module.SerialMotorsBus
-    original = bus_cls.sync_read
-    if getattr(original, "_roboclaw_present_position_retry", False):
-        return
-    signature = inspect.signature(original)
-
-    def sync_read_with_present_position_retry(self: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        try:
-            return original(self, *args, **kwargs)
-        except ConnectionError:
-            bound = signature.bind(self, *args, **kwargs)
-            bound.apply_defaults()
-            data_name = bound.arguments.get("data_name")
-            num_retry = bound.arguments.get("num_retry", 0)
-            if not _should_retry_present_position(data_name, num_retry, min_retries):
-                raise
-            retry_kwargs = {**bound.kwargs, "num_retry": min_retries}
-            return original(*bound.args, **retry_kwargs)
-
-    sync_read_with_present_position_retry._roboclaw_present_position_retry = True
-    bus_cls.sync_read = sync_read_with_present_position_retry
-
-
 def apply_record_loop_patch(record_module: Any) -> None:
     """Guard LeRobot record loops against stale skip-reset key events."""
 
@@ -211,10 +181,6 @@ def _record_loop_context(kwargs: dict[str, Any]) -> tuple[Any, Any]:
     return kwargs["events"], kwargs.get("dataset")
 
 
-def _should_retry_present_position(data_name: Any, num_retry: Any, min_retries: int) -> bool:
-    return data_name == "Present_Position" and (num_retry or 0) < min_retries
-
-
 def _skip_reset_requested(events: Any) -> bool:
     if not isinstance(events, dict):
         return False
@@ -223,4 +189,3 @@ def _skip_reset_requested(events: Any) -> bool:
         and not events.get("rerecord_episode")
         and not events.get("stop_recording")
     )
-

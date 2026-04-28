@@ -6,7 +6,6 @@ import sys
 
 from roboclaw.embodied.command.headless_patch import (
     apply_headless_patch,
-    apply_motor_read_retry_patch,
     apply_record_loop_patch,
 )
 
@@ -53,7 +52,6 @@ def _run(action: str, argv: list[str] | None = None) -> None:
             from lerobot.scripts import lerobot_record as module
 
             apply_record_loop_patch(module)
-            apply_motor_read_retry_patch()
         elif action == "replay":
             from lerobot.scripts import lerobot_replay as module
         elif action == "teleoperate":
