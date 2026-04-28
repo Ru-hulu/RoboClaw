@@ -10,7 +10,7 @@ from roboclaw.data.datasets import DatasetCatalog, datasets_root_from_manifest
 from roboclaw.embodied.board import Board, Command, SessionState
 from roboclaw.embodied.board.board import IDLE_STATE
 from roboclaw.embodied.calibration import AutoCalibrationBatch
-from roboclaw.embodied.command import CommandBuilder
+from roboclaw.embodied.command import ActionError, CommandBuilder
 from roboclaw.embodied.embodiment.hardware.monitor import (
     HardwareMonitor, check_arm_status, check_camera_status,
 )
@@ -26,6 +26,11 @@ from roboclaw.embodied.service.session import (
 from roboclaw.embodied.service.session.calibrate import CalibrationSession
 from roboclaw.embodied.embodiment.doctor import DoctorService
 from roboclaw.embodied.service.session.setup import SetupSession
+from roboclaw.embodied.service.verification import (
+    PreflightVerifier,
+    VerificationRequest,
+    Verifier,
+)
 
 
 class EmbodiedService:
@@ -41,6 +46,7 @@ class EmbodiedService:
         hardware_monitor: HardwareMonitor | None = None,
         board: Board | None = None,
         manifest: Manifest | None = None,
+        preflight_verifier: Verifier | None = None,
     ) -> None:
         self._monitor = hardware_monitor
         self.board = board or Board()
@@ -53,6 +59,7 @@ class EmbodiedService:
         self._active_operation: Any | None = None
         self._active_session: Session | None = None
         self._recording_started = False
+        self._preflight_verifier = preflight_verifier or PreflightVerifier()
 
         # Sub-services
         self.calibration = CalibrationSession(self)
@@ -193,6 +200,26 @@ class EmbodiedService:
         finally:
             self._finish_active_operation(session, owner)
 
+    def _verify_inference_preflight(
+        self,
+        *,
+        argv: list[str],
+        dataset: Any,
+        num_episodes: int,
+        episode_time_s: int,
+        use_cameras: bool,
+    ) -> None:
+        result = self._preflight_verifier.verify(VerificationRequest(
+            argv=argv,
+            manifest=self.manifest,
+            dataset=dataset,
+            num_episodes=num_episodes,
+            episode_time_s=episode_time_s,
+            use_cameras=use_cameras,
+        ))
+        if not result.ok:
+            raise ActionError(result.format_violations())
+
     # -- Operations (Web entry points) --
 
     async def start_teleop(self, *, fps: int = 30, arms: str = "") -> None:
@@ -272,6 +299,13 @@ class EmbodiedService:
             arms=arms,
             use_cameras=use_cameras,
         )
+        self._verify_inference_preflight(
+            argv=argv,
+            dataset=output_dataset.runtime,
+            num_episodes=num_episodes,
+            episode_time_s=episode_time_s,
+            use_cameras=use_cameras,
+        )
         await self._start_managed_session(self.infer, owner="inferring", argv=argv)
 
     async def run_replay(
@@ -317,6 +351,13 @@ class EmbodiedService:
             num_episodes=num_episodes,
             episode_time_s=episode_time_s,
             arms=arms,
+            use_cameras=use_cameras,
+        )
+        self._verify_inference_preflight(
+            argv=argv,
+            dataset=output_dataset.runtime,
+            num_episodes=num_episodes,
+            episode_time_s=episode_time_s,
             use_cameras=use_cameras,
         )
         return await self._run_managed_session(
