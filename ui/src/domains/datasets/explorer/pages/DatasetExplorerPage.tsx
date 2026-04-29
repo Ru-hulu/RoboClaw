@@ -1090,7 +1090,7 @@ export default function DatasetExplorerView() {
     if (!nextRef.dataset && !nextRef.path) {
       return
     }
-    setPageState({ prepareError: '' })
+    setPageState({ prepareStatus: '', prepareError: '' })
     if (nextSource === 'remote' && nextRef.dataset) {
       setPageState({
         datasetIdInput: nextRef.dataset,
@@ -1211,6 +1211,7 @@ export default function DatasetExplorerView() {
         path: payload.local_path,
         datasetOverride: payload.dataset_name,
       })
+      setPageState({ prepareStatus: payload.display_name })
     } catch (error) {
       setPageState({ prepareError: error instanceof Error ? error.message : t('qualityRunFailed') })
     } finally {
