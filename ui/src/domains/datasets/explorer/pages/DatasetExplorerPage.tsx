@@ -1,10 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
+import { useNavigate } from 'react-router-dom'
 import { useI18n } from '@/i18n'
 import {
+  buildExplorerQuery,
+  buildExplorerRefKey,
+  listExplorerDatasets,
+  searchDatasetSuggestions,
   useExplorer,
+  type DatasetSuggestion,
   type EpisodeDetail,
   type ExplorerDatasetRef,
+  type ExplorerPageState,
+  type ExplorerSource,
   type FeatureStat,
   type ModalityItem,
 } from '@/domains/datasets/explorer/store/useExplorerStore'
@@ -562,7 +570,7 @@ function EpisodeHoverPreview({
   )
 }
 
-function EpisodeBrowser() {
+function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
   const { t } = useI18n()
   const {
     episodePage,
@@ -578,7 +586,6 @@ function EpisodeBrowser() {
   } = useExplorer()
   const episodes = episodePage?.episodes ?? []
   const selectedDataset = episodePage?.dataset ?? ''
-  const selectedDatasetRef: ExplorerDatasetRef = { source: 'remote', dataset: selectedDataset }
   const hoverTimerRef = useRef<number | null>(null)
   const closeTimerRef = useRef<number | null>(null)
   const requestTokenRef = useRef(0)
@@ -598,7 +605,7 @@ function EpisodeBrowser() {
     setHoveredPreviewError('')
     setPreviewPlayReady(false)
     setVideoCurrentTime(0)
-  }, [selectedDataset])
+  }, [selectedDataset, datasetRef.path, datasetRef.source])
 
   useEffect(() => {
     return () => {
@@ -678,13 +685,19 @@ function EpisodeBrowser() {
       const requestToken = ++requestTokenRef.current
       try {
         const response = await fetch(
-          `/api/explorer/episode?dataset=${encodeURIComponent(selectedDataset)}&episode_index=${episodeIndex}&preview_only=true`,
+          `/api/explorer/episode?${buildExplorerQuery(datasetRef)}&episode_index=${episodeIndex}&preview=true`,
         )
         if (!response.ok) {
           throw new Error(`Failed to load episode preview (${response.status})`)
         }
         const detail: EpisodeDetail = await response.json()
         previewCacheRef.current.set(episodeIndex, detail)
+        if (previewCacheRef.current.size > 20) {
+          const oldestEpisodeIndex = previewCacheRef.current.keys().next().value
+          if (oldestEpisodeIndex !== undefined) {
+            previewCacheRef.current.delete(oldestEpisodeIndex)
+          }
+        }
         if (requestToken === requestTokenRef.current) {
           setHoveredPreview(detail)
         }
@@ -713,7 +726,7 @@ function EpisodeBrowser() {
             type="button"
             className="explorer-episodes__pager"
             disabled={episodePage!.page <= 1 || episodePageLoading}
-            onClick={() => void loadEpisodePage(selectedDatasetRef, episodePage!.page - 1, episodePage!.page_size)}
+            onClick={() => void loadEpisodePage(datasetRef, episodePage!.page - 1, episodePage!.page_size)}
           >
             Prev
           </button>
@@ -721,7 +734,7 @@ function EpisodeBrowser() {
             type="button"
             className="explorer-episodes__pager"
             disabled={episodePage!.page >= episodePage!.total_pages || episodePageLoading}
-            onClick={() => void loadEpisodePage(selectedDatasetRef, episodePage!.page + 1, episodePage!.page_size)}
+            onClick={() => void loadEpisodePage(datasetRef, episodePage!.page + 1, episodePage!.page_size)}
           >
             Next
           </button>
@@ -741,11 +754,10 @@ function EpisodeBrowser() {
               if (selectedEpisodeIndex === ep.episode_index) {
                 clearEpisode()
               } else {
-                void selectEpisode(selectedDatasetRef, ep.episode_index)
+                void selectEpisode(datasetRef, ep.episode_index)
               }
             }}
             onMouseEnter={() => scheduleHoverPreview(ep.episode_index)}
-            onMouseMove={() => scheduleHoverPreview(ep.episode_index)}
             onMouseLeave={scheduleClosePreview}
           >
             <span className="explorer-episode-item__idx">#{ep.episode_index}</span>
@@ -852,60 +864,361 @@ function EpisodeBrowser() {
 
 export default function DatasetExplorerView() {
   const { t } = useI18n()
+  const navigate = useNavigate()
   const {
-    selectedDataset,
+    prepareRemoteDatasetForWorkflow,
+    createLocalDirectorySession,
     selectDataset,
   } = useWorkflow()
   const {
     summary,
+    summaryRefKey,
     summaryLoading,
     summaryError,
     dashboard,
+    dashboardRefKey,
     dashboardLoading,
     dashboardError,
     episodePage,
+    episodePageRefKey,
+    source,
+    datasetIdInput,
+    remoteDatasetSelected,
+    localDatasetInput,
+    localDatasetPathInput,
+    localDatasetPathSelected,
+    localPathDatasetLabel,
+    prepareStatus,
+    prepareError,
+    preparingForQuality,
+    activeDatasetRef,
+    setPageState,
+    setActiveDatasetRef,
     loadSummary,
     loadDashboard,
     loadEpisodePage,
   } = useExplorer()
-  const [datasetIdInput, setDatasetIdInput] = useState('')
-  const currentDataset = selectedDataset || summary?.dataset || dashboard?.dataset || episodePage?.dataset || ''
-  const currentDatasetRef: ExplorerDatasetRef = { source: 'remote', dataset: currentDataset }
+  const [localDatasets, setLocalDatasets] = useState<DatasetSuggestion[]>([])
+  const [datasetSuggestions, setDatasetSuggestions] = useState<DatasetSuggestion[]>([])
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false)
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false)
+  const [highlightedSuggestionIndex, setHighlightedSuggestionIndex] = useState(-1)
+  const datasetInputRef = useRef<HTMLInputElement | null>(null)
+  const localDirectoryInputRef = useRef<HTMLInputElement | null>(null)
+  const blurTimerRef = useRef<number | null>(null)
+  const suggestionRequestRef = useRef(0)
+  const requestedDatasetKeyRef = useRef('')
+  const preparingForQualityRef = useRef(false)
+  const activeRefForSource = activeDatasetRef?.source === source ? activeDatasetRef : null
+  const activeRefKey = buildExplorerRefKey(activeRefForSource)
+  const summaryMatchesActiveRef = Boolean(activeRefKey && summaryRefKey === activeRefKey)
+  const dashboardMatchesActiveRef = Boolean(activeRefKey && dashboardRefKey === activeRefKey)
+  const summaryForSource = summaryMatchesActiveRef ? summary : null
+  const summaryLoadingForSource = summaryMatchesActiveRef && summaryLoading
+  const summaryErrorForSource = summaryMatchesActiveRef ? summaryError : ''
+  const dashboardForSource = dashboardMatchesActiveRef ? dashboard : null
+  const dashboardLoadingForSource = dashboardMatchesActiveRef && dashboardLoading
+  const dashboardErrorForSource = dashboardMatchesActiveRef ? dashboardError : ''
+  const episodePageForSource = activeRefKey && episodePageRefKey.startsWith(`${activeRefKey}|`)
+    ? episodePage
+    : null
+  const currentDataset =
+    summaryForSource?.dataset || dashboardForSource?.dataset || episodePageForSource?.dataset || ''
+
+  const datasetRef: ExplorerDatasetRef =
+    source === 'remote'
+      ? { source, dataset: remoteDatasetSelected.trim() || undefined }
+      : source === 'local'
+        ? { source, dataset: localDatasetInput.trim() || undefined }
+        : {
+            source,
+            dataset: localPathDatasetLabel.trim() || undefined,
+            path: localDatasetPathSelected.trim() || undefined,
+          }
+
+  async function loadDataset(ref: ExplorerDatasetRef): Promise<void> {
+    const requestKey = buildExplorerRefKey(ref)
+    requestedDatasetKeyRef.current = requestKey
+    setActiveDatasetRef(ref)
+    await Promise.allSettled([
+      loadSummary(ref),
+      loadDashboard(ref),
+      loadEpisodePage(ref, 1, 50),
+    ])
+  }
 
   useEffect(() => {
-    if (!currentDataset) {
+    if (source !== 'local') {
       return
     }
-    if (summary?.dataset !== currentDataset) {
-      void loadSummary(currentDatasetRef).catch(() => {})
-    }
-    if (dashboard?.dataset !== currentDataset) {
-      void loadDashboard(currentDatasetRef).catch(() => {})
-    }
-    if (episodePage?.dataset !== currentDataset) {
-      void loadEpisodePage(currentDatasetRef, 1, 50)
-    }
-  }, [currentDataset, summary?.dataset, dashboard?.dataset, episodePage?.dataset, loadSummary, loadDashboard, loadEpisodePage])
+    void listExplorerDatasets('local')
+      .then((items) => setLocalDatasets(items))
+      .catch(() => setLocalDatasets([]))
+  }, [source])
 
-  async function handleLoad(): Promise<void> {
-    const datasetId = datasetIdInput.trim()
-    if (!datasetId) {
+  useEffect(() => {
+    const activeDataset = datasetRef.dataset?.trim() ?? ''
+    const activePath = datasetRef.path?.trim() ?? ''
+    const requestKey = buildExplorerRefKey(datasetRef)
+    if (!activeDataset && !activePath) {
       return
     }
-    const datasetRef: ExplorerDatasetRef = { source: 'remote', dataset: datasetId }
-    await Promise.allSettled([
-      loadSummary(datasetRef),
-      loadDashboard(datasetRef),
-      loadEpisodePage(datasetRef, 1, 50),
-    ])
-    try {
-      await selectDataset(datasetId)
-    } catch {
-      // Explorer dashboard is already loaded; workflow sync can retry on destination pages.
+    const loadedKey = buildExplorerRefKey(activeDatasetRef)
+    const hasLoadedActiveDataset =
+      loadedKey === requestKey
+      && Boolean(summaryForSource || dashboardForSource || episodePageForSource)
+    if (requestedDatasetKeyRef.current === requestKey || hasLoadedActiveDataset) {
+      return
+    }
+    void loadDataset(datasetRef)
+  }, [
+    source,
+    remoteDatasetSelected,
+    localDatasetInput,
+    localDatasetPathSelected,
+    localPathDatasetLabel,
+    activeDatasetRef,
+    summaryForSource,
+    dashboardForSource,
+    episodePageForSource,
+    loadSummary,
+    loadDashboard,
+    loadEpisodePage,
+  ])
+
+  useEffect(() => {
+    return () => {
+      if (blurTimerRef.current != null) {
+        window.clearTimeout(blurTimerRef.current)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (source !== 'remote') {
+      setDatasetSuggestions([])
+      setSuggestionsLoading(false)
+      setSuggestionsOpen(false)
+      setHighlightedSuggestionIndex(-1)
+      return
+    }
+    const needle = datasetIdInput.trim()
+    if (needle.length < 2 || needle === currentDataset.trim()) {
+      suggestionRequestRef.current += 1
+      setDatasetSuggestions([])
+      setSuggestionsLoading(false)
+      setSuggestionsOpen(false)
+      setHighlightedSuggestionIndex(-1)
+      return
+    }
+
+    const requestId = suggestionRequestRef.current + 1
+    suggestionRequestRef.current = requestId
+    setSuggestionsLoading(true)
+    const timer = window.setTimeout(() => {
+      void searchDatasetSuggestions(needle, source, 8)
+        .then((items) => {
+          if (suggestionRequestRef.current !== requestId) return
+          setDatasetSuggestions(items)
+          setHighlightedSuggestionIndex(items.length > 0 ? 0 : -1)
+          if (document.activeElement === datasetInputRef.current) {
+            setSuggestionsOpen(true)
+          }
+        })
+        .catch(() => {
+          if (suggestionRequestRef.current !== requestId) return
+          setDatasetSuggestions([])
+          setHighlightedSuggestionIndex(-1)
+        })
+        .finally(() => {
+          if (suggestionRequestRef.current === requestId) {
+            setSuggestionsLoading(false)
+          }
+        })
+    }, 180)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [datasetIdInput, currentDataset, source])
+
+  function openSuggestions(): void {
+    if (blurTimerRef.current != null) {
+      window.clearTimeout(blurTimerRef.current)
+      blurTimerRef.current = null
+    }
+    if (datasetIdInput.trim().length >= 2) {
+      setSuggestionsOpen(true)
     }
   }
 
-  const datasetSummary = summary?.summary
+  function closeSuggestionsSoon(): void {
+    if (blurTimerRef.current != null) {
+      window.clearTimeout(blurTimerRef.current)
+    }
+    blurTimerRef.current = window.setTimeout(() => {
+      setSuggestionsOpen(false)
+    }, 120)
+  }
+
+  function markExplorerDraft(nextSource: ExplorerSource): void {
+    requestedDatasetKeyRef.current = ''
+    if (activeDatasetRef?.source === nextSource) {
+      setActiveDatasetRef(null)
+    }
+  }
+
+  async function handleLoad(
+    override?: Partial<ExplorerDatasetRef> & { datasetOverride?: string },
+  ): Promise<void> {
+    const nextSource = override?.source ?? source
+    const nextDataset =
+      override?.datasetOverride
+      ?? override?.dataset
+      ?? (nextSource === 'remote'
+        ? datasetIdInput
+        : nextSource === 'local'
+          ? localDatasetInput
+          : currentDataset)
+    const nextPath = override?.path ?? (nextSource === 'path' ? localDatasetPathInput : undefined)
+    const nextRef: ExplorerDatasetRef = {
+      source: nextSource,
+      dataset: nextDataset?.trim() || undefined,
+      path: nextPath?.trim() || undefined,
+    }
+    if (!nextRef.dataset && !nextRef.path) {
+      return
+    }
+    setPageState({ prepareStatus: '', prepareError: '' })
+    if (nextSource === 'remote' && nextRef.dataset) {
+      setPageState({
+        datasetIdInput: nextRef.dataset,
+        remoteDatasetSelected: nextRef.dataset,
+      })
+    }
+    if (nextSource === 'local' && nextRef.dataset) {
+      setPageState({ localDatasetInput: nextRef.dataset })
+    }
+    if (nextSource === 'path' && nextRef.path) {
+      setPageState({
+        localDatasetPathInput: nextRef.path,
+        localDatasetPathSelected: nextRef.path,
+        localPathDatasetLabel: nextRef.dataset ?? '',
+      })
+    }
+    setSuggestionsOpen(false)
+    setDatasetSuggestions([])
+    setHighlightedSuggestionIndex(-1)
+    await loadDataset(nextRef)
+    if (nextRef.source !== 'remote' && nextRef.dataset) {
+      try {
+        await selectDataset(nextRef.dataset)
+      } catch (error) {
+        setPageState({
+          prepareError: error instanceof Error ? error.message : t('qualityRunFailed'),
+        })
+      }
+    }
+  }
+
+  async function handleSuggestionSelect(datasetId: string): Promise<void> {
+    await handleLoad({ source: 'remote', datasetOverride: datasetId })
+  }
+
+  async function handleInputKeyDown(event: KeyboardEvent<HTMLInputElement>): Promise<void> {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      if (!suggestionsOpen) openSuggestions()
+      if (datasetSuggestions.length > 0) {
+        setHighlightedSuggestionIndex((current) => (current + 1) % datasetSuggestions.length)
+      }
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      if (!suggestionsOpen) openSuggestions()
+      if (datasetSuggestions.length > 0) {
+        setHighlightedSuggestionIndex((current) =>
+          current <= 0 ? datasetSuggestions.length - 1 : current - 1,
+        )
+      }
+      return
+    }
+    if (event.key === 'Escape') {
+      setSuggestionsOpen(false)
+      setHighlightedSuggestionIndex(-1)
+      return
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      const highlighted = datasetSuggestions[highlightedSuggestionIndex]
+      if (suggestionsOpen && highlighted) {
+        await handleSuggestionSelect(highlighted.id)
+        return
+      }
+      await handleLoad()
+    }
+  }
+
+  async function handlePrepareRemote(): Promise<void> {
+    if (preparingForQualityRef.current) return
+    const datasetId = datasetIdInput.trim()
+    if (!datasetId) return
+    preparingForQualityRef.current = true
+    setPageState({
+      preparingForQuality: true,
+      prepareStatus: t('preparingForQuality'),
+      prepareError: '',
+      remoteDatasetSelected: datasetId,
+    })
+    try {
+      const payload = await prepareRemoteDatasetForWorkflow(datasetId, false)
+      setPageState({ prepareStatus: `${t('preparedForQuality')}: ${payload.dataset_name}` })
+      navigate('/curation/quality')
+    } catch (error) {
+      setPageState({ prepareError: error instanceof Error ? error.message : t('qualityRunFailed') })
+    } finally {
+      preparingForQualityRef.current = false
+      setPageState({ preparingForQuality: false })
+    }
+  }
+
+  async function handleChooseLocalDirectory(event: ChangeEvent<HTMLInputElement>): Promise<void> {
+    const files = Array.from(event.target.files || [])
+    if (files.length === 0) {
+      return
+    }
+    const relativePaths = files.map((file) => {
+      const maybeRelative = (file as File & { webkitRelativePath?: string }).webkitRelativePath
+      return maybeRelative && maybeRelative.trim() ? maybeRelative : file.name
+    })
+    const displayName = relativePaths[0]?.split('/')[0] || files[0].name
+    setPageState({
+      prepareStatus: t('localDirectoryUploading'),
+      prepareError: '',
+    })
+    try {
+      const payload = await createLocalDirectorySession(files, relativePaths, displayName)
+      setPageState({
+        localDatasetPathInput: payload.local_path,
+        localDatasetPathSelected: payload.local_path,
+        localPathDatasetLabel: payload.dataset_name,
+        prepareStatus: payload.display_name,
+      })
+      await handleLoad({
+        source: 'path',
+        path: payload.local_path,
+        datasetOverride: payload.dataset_name,
+      })
+      setPageState({ prepareStatus: payload.display_name })
+    } catch (error) {
+      setPageState({ prepareError: error instanceof Error ? error.message : t('qualityRunFailed') })
+    } finally {
+      event.target.value = ''
+    }
+  }
+
+  const datasetSummary = summaryForSource?.summary
 
   return (
     <div className="page-enter quality-view">
@@ -918,53 +1231,232 @@ export default function DatasetExplorerView() {
 
       <div className="dataset-workbench">
         <div className="dataset-workbench__controls">
+          <label className="dataset-workbench__control">
+            <span>{t('dataSource')}</span>
+            <select
+              className="dataset-workbench__select"
+              value={source}
+              onChange={(event) => {
+                const nextSource = event.target.value as ExplorerSource
+                setPageState({ source: nextSource })
+                setDatasetSuggestions([])
+                setSuggestionsOpen(false)
+                setHighlightedSuggestionIndex(-1)
+                requestedDatasetKeyRef.current = ''
+              }}
+            >
+              <option value="remote">{t('remoteDataset')}</option>
+              <option value="local">{t('localDataset')}</option>
+              <option value="path">{t('localDirectory')}</option>
+            </select>
+          </label>
+
+          {source === 'remote' && (
           <label className="dataset-workbench__control dataset-workbench__control--wide">
             <span>{t('hfDatasetId')}</span>
-            <input
-              className="dataset-workbench__input"
-              type="text"
-              value={datasetIdInput}
-              onChange={(event) => setDatasetIdInput(event.target.value)}
-              placeholder={t('hfDatasetPlaceholder')}
-            />
+            <div className="dataset-workbench__combobox">
+              <input
+                ref={datasetInputRef}
+                className="dataset-workbench__input"
+                type="text"
+                value={datasetIdInput}
+                onChange={(event) => {
+                  const nextValue = event.target.value
+                  const patch: Partial<ExplorerPageState> = {
+                    datasetIdInput: nextValue,
+                    remoteDatasetSelected:
+                      nextValue.trim() !== remoteDatasetSelected.trim()
+                        ? ''
+                        : remoteDatasetSelected,
+                  }
+                  setPageState(patch)
+                  if (nextValue.trim() !== remoteDatasetSelected.trim()) {
+                    markExplorerDraft('remote')
+                  }
+                }}
+                onFocus={openSuggestions}
+                onBlur={closeSuggestionsSoon}
+                onKeyDown={(event) => {
+                  void handleInputKeyDown(event)
+                }}
+                placeholder={t('hfDatasetPlaceholder')}
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={suggestionsOpen}
+                aria-controls="explorer-dataset-suggestions"
+                aria-activedescendant={
+                  highlightedSuggestionIndex >= 0
+                    ? `explorer-dataset-suggestion-${highlightedSuggestionIndex}`
+                    : undefined
+                }
+              />
+              {suggestionsOpen
+                && (suggestionsLoading
+                  || datasetSuggestions.length > 0
+                  || datasetIdInput.trim().length >= 2) && (
+                <div
+                  className="dataset-workbench__suggestions"
+                  id="explorer-dataset-suggestions"
+                  role="listbox"
+                >
+                  {suggestionsLoading ? (
+                    <div className="dataset-workbench__suggestion-status">
+                      {t('datasetSuggestionsLoading')}
+                    </div>
+                  ) : datasetSuggestions.length > 0 ? (
+                    datasetSuggestions.map((suggestion, index) => (
+                      <button
+                        key={suggestion.id}
+                        id={`explorer-dataset-suggestion-${index}`}
+                        type="button"
+                        role="option"
+                        aria-selected={index === highlightedSuggestionIndex}
+                        className={cn(
+                          'dataset-workbench__suggestion',
+                          index === highlightedSuggestionIndex && 'is-active',
+                        )}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onMouseEnter={() => setHighlightedSuggestionIndex(index)}
+                        onClick={() => {
+                          void handleSuggestionSelect(suggestion.id)
+                        }}
+                      >
+                        {suggestion.id}
+                      </button>
+                    ))
+                  ) : (
+                    <div className="dataset-workbench__suggestion-status">
+                      {t('noDatasetSuggestions')}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </label>
+          )}
+
+          {source === 'local' && (
+            <label className="dataset-workbench__control dataset-workbench__control--wide">
+              <span>{t('localDataset')}</span>
+              <select
+                className="dataset-workbench__select"
+                value={localDatasetInput}
+                onChange={(event) => {
+                  setPageState({ localDatasetInput: event.target.value })
+                  markExplorerDraft('local')
+                }}
+              >
+                <option value="">{t('selectDataset')}</option>
+                {localDatasets.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label || item.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          {source === 'path' && (
+            <label className="dataset-workbench__control dataset-workbench__control--wide">
+              <span>{t('localDirectory')}</span>
+              <div className="dataset-workbench__path-row">
+                <ActionButton
+                  type="button"
+                  variant="secondary"
+                  onClick={() => localDirectoryInputRef.current?.click()}
+                  className="dataset-workbench__import-btn"
+                >
+                  {t('chooseLocalDirectory')}
+                </ActionButton>
+                <input
+                  className="dataset-workbench__input"
+                  type="text"
+                  value={localDatasetPathInput}
+                  onChange={(event) => {
+                    setPageState({
+                      localDatasetPathInput: event.target.value,
+                      localDatasetPathSelected: '',
+                      localPathDatasetLabel: '',
+                    })
+                    markExplorerDraft('path')
+                  }}
+                  placeholder={t('localPathPlaceholder')}
+                />
+                <input
+                  ref={localDirectoryInputRef}
+                  type="file"
+                  multiple
+                  hidden
+                  // @ts-expect-error vendor directory picker attribute
+                  webkitdirectory=""
+                  onChange={(event) => {
+                    void handleChooseLocalDirectory(event)
+                  }}
+                />
+              </div>
+            </label>
+          )}
 
           <ActionButton
             type="button"
             variant="secondary"
             onClick={() => void handleLoad()}
-            disabled={!datasetIdInput.trim()}
+            disabled={
+              preparingForQuality
+              || (source === 'remote'
+                ? !datasetIdInput.trim()
+                : source === 'local'
+                  ? !localDatasetInput.trim()
+                  : !localDatasetPathInput.trim())
+            }
             className="dataset-workbench__import-btn"
           >
-            {t('selectDataset')}
+            {t('browseDataset')}
           </ActionButton>
+
+          {source === 'remote' && (
+            <ActionButton
+              type="button"
+              variant="secondary"
+              onClick={() => void handlePrepareRemote()}
+              disabled={!datasetIdInput.trim() || preparingForQuality}
+              className="dataset-workbench__import-btn"
+            >
+              {preparingForQuality ? t('preparingForQuality') : t('prepareForQuality')}
+            </ActionButton>
+          )}
         </div>
+        {(prepareStatus || prepareError) && (
+          <div className={`dataset-workbench__status ${prepareError ? 'is-error' : ''}`}>
+            {prepareError || prepareStatus}
+          </div>
+        )}
       </div>
 
       {/* Info bar */}
       {currentDataset && datasetSummary ? (
         <div className="workflow-view__info-bar">
-          <span>{summary!.dataset}</span>
+          <span>{summaryForSource!.dataset}</span>
           <span>{datasetSummary.total_episodes} {t('episodes')}</span>
           <span>{datasetSummary.fps} fps</span>
           <span>{datasetSummary.robot_type}</span>
           {datasetSummary.codebase_version && <span>{datasetSummary.codebase_version}</span>}
         </div>
-      ) : summaryError ? (
+      ) : summaryErrorForSource ? (
         <GlassPanel className="quality-view__empty">
-          <span className="quality-sidebar__error">{summaryError}</span>
+          <span className="quality-sidebar__error">{summaryErrorForSource}</span>
         </GlassPanel>
-      ) : !summaryLoading ? (
+      ) : !summaryLoadingForSource ? (
         <GlassPanel className="quality-view__empty">
-          {t('hfDatasetPlaceholder')}
+          {source === 'remote' ? t('remoteDatasetEmpty') : t('chooseLocalDirectory')}
         </GlassPanel>
       ) : null}
 
-      {summaryLoading && (
+      {summaryLoadingForSource && (
         <GlassPanel className="quality-view__empty">{t('running')}...</GlassPanel>
       )}
 
-      {currentDataset && (datasetSummary || dashboard || episodePage) && (
+      {currentDataset && (datasetSummary || dashboardForSource || episodePageForSource) && (
         <div className="quality-layout">
           <div className="quality-layout__main">
             {/* KPIs */}
@@ -972,36 +1464,36 @@ export default function DatasetExplorerView() {
               <MetricCard label={t('totalEpisodes')} value={datasetSummary?.total_episodes ?? '--'} />
               <MetricCard label="Frames" value={datasetSummary?.total_frames ?? '--'} accent="sage" />
               <MetricCard label="FPS" value={datasetSummary?.fps ?? '--'} accent="amber" />
-              <MetricCard label={t('parquetFiles')} value={dashboard?.files.parquet_files ?? '--'} accent="teal" />
-              <MetricCard label={t('videoFiles')} value={dashboard?.files.video_files ?? '--'} accent="coral" />
+              <MetricCard label={t('parquetFiles')} value={dashboardForSource?.files.parquet_files ?? '--'} accent="teal" />
+              <MetricCard label={t('videoFiles')} value={dashboardForSource?.files.video_files ?? '--'} accent="coral" />
             </div>
 
             {/* Modality chips */}
             <GlassPanel className="explorer-section">
               <h3>{t('modalities')}</h3>
-              {dashboardLoading && !dashboard ? (
+              {dashboardLoadingForSource && !dashboardForSource ? (
                 <div className="explorer-empty">{t('running')}...</div>
-              ) : dashboard ? (
-                <ModalityChips items={dashboard.modality_summary} />
+              ) : dashboardForSource ? (
+                <ModalityChips items={dashboardForSource.modality_summary} />
               ) : (
-                <div className="explorer-empty">{dashboardError || t('noStats')}</div>
+                <div className="explorer-empty">{dashboardErrorForSource || t('noStats')}</div>
               )}
             </GlassPanel>
 
             {/* Feature stats table */}
             <GlassPanel className="explorer-section">
               <h3>{t('featureStats')}</h3>
-              {dashboard ? (
+              {dashboardForSource ? (
                 <>
                   <p className="explorer-section__sub">
-                    {dashboard.feature_names.length} features
-                    {dashboard.dataset_stats.features_with_stats > 0 &&
-                      ` / ${dashboard.dataset_stats.features_with_stats} with stats`}
+                    {dashboardForSource.feature_names.length} features
+                    {dashboardForSource.dataset_stats.features_with_stats > 0 &&
+                      ` / ${dashboardForSource.dataset_stats.features_with_stats} with stats`}
                   </p>
-                  <FeatureStatsTable stats={dashboard.feature_stats} />
+                  <FeatureStatsTable stats={dashboardForSource.feature_stats} />
                 </>
               ) : (
-                <div className="explorer-empty">{dashboardLoading ? t('running') : (dashboardError || t('noStats'))}</div>
+                <div className="explorer-empty">{dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}</div>
               )}
             </GlassPanel>
           </div>
@@ -1010,38 +1502,38 @@ export default function DatasetExplorerView() {
           <GlassPanel className="quality-layout__sidebar">
             <div className="quality-sidebar__section">
               <h3>{t('episodeBrowser')}</h3>
-              <EpisodeBrowser />
+              <EpisodeBrowser datasetRef={datasetRef} />
             </div>
 
             <div className="quality-sidebar__section">
               <h3>{t('fileInventory')}</h3>
-              {dashboard ? (
+              {dashboardForSource ? (
                 <div className="explorer-sidebar-stats">
-                  <div><span className="explorer-sidebar-stats__label">{t('totalFiles')}</span> <span>{dashboard.files.total_files}</span></div>
-                  <div><span className="explorer-sidebar-stats__label">{t('parquetFiles')}</span> <span>{dashboard.files.parquet_files}</span></div>
-                  <div><span className="explorer-sidebar-stats__label">{t('videoFiles')}</span> <span>{dashboard.files.video_files}</span></div>
-                  <div><span className="explorer-sidebar-stats__label">{t('metaFiles')}</span> <span>{dashboard.files.meta_files}</span></div>
-                  <div><span className="explorer-sidebar-stats__label">{t('otherFiles')}</span> <span>{dashboard.files.other_files}</span></div>
+                  <div><span className="explorer-sidebar-stats__label">{t('totalFiles')}</span> <span>{dashboardForSource.files.total_files}</span></div>
+                  <div><span className="explorer-sidebar-stats__label">{t('parquetFiles')}</span> <span>{dashboardForSource.files.parquet_files}</span></div>
+                  <div><span className="explorer-sidebar-stats__label">{t('videoFiles')}</span> <span>{dashboardForSource.files.video_files}</span></div>
+                  <div><span className="explorer-sidebar-stats__label">{t('metaFiles')}</span> <span>{dashboardForSource.files.meta_files}</span></div>
+                  <div><span className="explorer-sidebar-stats__label">{t('otherFiles')}</span> <span>{dashboardForSource.files.other_files}</span></div>
                 </div>
               ) : (
-                <div className="explorer-empty">{dashboardLoading ? t('running') : (dashboardError || t('noStats'))}</div>
+                <div className="explorer-empty">{dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}</div>
               )}
             </div>
 
             <div className="quality-sidebar__section">
               <h3>{t('featureType')}</h3>
-              {dashboard ? (
-                <TypeDistribution items={dashboard.feature_type_distribution} />
+              {dashboardForSource ? (
+                <TypeDistribution items={dashboardForSource.feature_type_distribution} />
               ) : (
-                <div className="explorer-empty">{dashboardLoading ? t('running') : (dashboardError || t('noStats'))}</div>
+                <div className="explorer-empty">{dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}</div>
               )}
             </div>
 
-            {dashboard?.dataset_stats.row_count != null && (
+            {dashboardForSource?.dataset_stats.row_count != null && (
               <div className="quality-sidebar__section">
                 <div className="explorer-sidebar-stats">
-                  <div><span className="explorer-sidebar-stats__label">Total rows</span> <span>{dashboard.dataset_stats.row_count.toLocaleString()}</span></div>
-                  <div><span className="explorer-sidebar-stats__label">{t('vectorFeatures')}</span> <span>{dashboard.dataset_stats.vector_features}</span></div>
+                  <div><span className="explorer-sidebar-stats__label">Total rows</span> <span>{dashboardForSource.dataset_stats.row_count.toLocaleString()}</span></div>
+                  <div><span className="explorer-sidebar-stats__label">{t('vectorFeatures')}</span> <span>{dashboardForSource.dataset_stats.vector_features}</span></div>
                 </div>
               </div>
             )}

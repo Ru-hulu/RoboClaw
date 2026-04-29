@@ -2217,7 +2217,7 @@ a {
 
 .dataset-workbench__controls {
     display: grid;
-    grid-template-columns: minmax(220px, 280px) minmax(280px, 1fr) auto;
+    grid-template-columns: minmax(160px, 220px) minmax(280px, 1fr) auto auto;
     gap: 12px;
     align-items: end;
 }
@@ -2248,6 +2248,53 @@ a {
 
 .dataset-workbench__import-btn {
     white-space: nowrap;
+}
+
+.dataset-workbench__combobox {
+  position: relative;
+}
+
+.dataset-workbench__suggestions {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  display: grid;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid rgba(47, 111, 228, 0.16);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 16px 36px rgba(30, 41, 59, 0.14);
+}
+
+.dataset-workbench__suggestion,
+.dataset-workbench__suggestion-status {
+  min-height: 34px;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--tx2);
+  font-size: 13px;
+  text-align: left;
+}
+
+.dataset-workbench__suggestion {
+  cursor: pointer;
+}
+
+.dataset-workbench__suggestion:hover,
+.dataset-workbench__suggestion.is-active {
+  background: rgba(47, 111, 228, 0.08);
+  color: var(--tx);
+}
+
+.dataset-workbench__path-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
 }
 
 .dataset-workbench__status {
