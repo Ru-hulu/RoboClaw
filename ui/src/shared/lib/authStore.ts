@@ -9,7 +9,6 @@
 
 import { create } from 'zustand'
 import { evoApi, type UserInfo } from '@/shared/api/evoClient'
-import { pushSession, clearSession } from '@/shared/api/localAuthSync'
 
 const ACCESS_KEY = 'evo_access_token'
 const REFRESH_KEY = 'evo_refresh_token'
