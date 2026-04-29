@@ -1,6 +1,5 @@
 import { create } from 'zustand'
 import { api, postJson } from '@/shared/api/client'
-import { useHardwareStore } from '@/domains/hardware/store/useHardwareStore'
 
 const RECOVERY = '/api/recovery'
 const RUNTIME_INFO = '/api/system/runtime-info'
@@ -12,19 +11,10 @@ export interface RecoveryFault {
   timestamp: number
 }
 
-export interface RecoveryGuide {
-  can_recheck: boolean
-  step_count: number
-}
-
 interface RecoveryStore {
   faults: RecoveryFault[]
-  guides: Record<string, RecoveryGuide> | null
   restarting: boolean
   fetchFaults: () => Promise<void>
-  fetchGuides: () => Promise<void>
-  checkDevice: (kind: 'arm' | 'camera', alias: string) => Promise<{ ok: boolean; kind: string; alias: string }>
-  checkArmMotors: (alias: string) => Promise<{ ok: boolean; alias: string; missingMotors: string[] }>
   restartDashboard: () => Promise<void>
   handleDashboardEvent: (event: any) => void
 }
@@ -48,36 +38,11 @@ async function waitForDashboardRecovery(timeoutMs: number = 30000): Promise<void
 
 export const useRecoveryStore = create<RecoveryStore>((set) => ({
   faults: [],
-  guides: null,
   restarting: false,
 
   fetchFaults: async () => {
     const data = await api(`${RECOVERY}/faults`)
     set({ faults: Array.isArray(data.faults) ? data.faults : [] })
-  },
-
-  fetchGuides: async () => {
-    set({ guides: await api(`${RECOVERY}/guides`) })
-  },
-
-  checkDevice: async (kind, alias) => {
-    const data = await postJson(`${RECOVERY}/check-device`, { kind, alias })
-    await useHardwareStore.getState().fetchHardwareStatus()
-    return {
-      ok: Boolean(data.ok),
-      kind: String(data.kind || kind),
-      alias: String(data.alias || alias),
-    }
-  },
-
-  checkArmMotors: async (alias) => {
-    const data = await postJson(`${RECOVERY}/check-arm-motors`, { alias })
-    await useHardwareStore.getState().fetchHardwareStatus()
-    return {
-      ok: Boolean(data.ok),
-      alias: String(data.alias || alias),
-      missingMotors: Array.isArray(data.missing_motors) ? data.missing_motors.map(String) : [],
-    }
   },
 
   restartDashboard: async () => {

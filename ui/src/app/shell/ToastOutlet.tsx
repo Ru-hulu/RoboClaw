@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react'
 import { create } from 'zustand'
 
 interface ToastItem {
@@ -25,9 +26,18 @@ export const useToast = create<ToastStore>((set) => ({
 }))
 
 const typeStyles: Record<string, string> = {
-  s: 'border-l-gn text-gn',
-  e: 'border-l-rd text-rd',
-  i: 'border-l-ac text-ac',
+  s: 'border-l-gn bg-white text-gn',
+  e: 'border-l-rd text-white',
+  i: 'border-l-ac bg-white text-ac',
+}
+
+const typeInlineStyles: Record<string, CSSProperties> = {
+  s: {},
+  e: {
+    backgroundColor: 'var(--rd)',
+    borderColor: 'rgba(255,255,255,0.16)',
+  },
+  i: {},
 }
 
 export default function ToastContainer() {
@@ -40,8 +50,9 @@ export default function ToastContainer() {
       {items.map((t) => (
         <div
           key={t.id}
-          className={`px-3.5 py-2 rounded-lg border-l-4 bg-white text-sm pointer-events-auto shadow-elevated animate-slide-in-right
+          className={`px-3.5 py-2 rounded-lg border-l-4 text-sm pointer-events-auto shadow-elevated animate-slide-in-right
             ${typeStyles[t.type]}`}
+          style={typeInlineStyles[t.type]}
         >
           {t.message}
         </div>
