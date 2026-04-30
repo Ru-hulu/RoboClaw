@@ -24,6 +24,11 @@ from roboclaw.data.curation.state import (
 from roboclaw.http.routes import curation as curation_routes
 
 
+@pytest.fixture(autouse=True)
+def _isolate_dataset_sessions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(dataset_sessions, "get_roboclaw_home", lambda: tmp_path / "home")
+
+
 def _write_demo_dataset(root: Path, total_episodes: int = 1) -> Path:
     dataset_path = root / "demo"
     (dataset_path / "meta").mkdir(parents=True)
@@ -639,7 +644,11 @@ def test_workflow_import_hf_dataset_job(
     assert final_payload["imported_dataset_id"] == "cadene/droid_1.0.1"
 
 
-def test_workflow_dataset_detail_uses_remote_dataset_info(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_workflow_dataset_detail_uses_remote_dataset_info(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(curation_routes, "datasets_root", lambda: tmp_path / "datasets")
     app = FastAPI()
     curation_routes.register_curation_routes(app)
     client = TestClient(app)
