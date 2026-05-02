@@ -29,7 +29,7 @@ class TrainStopRequest(BaseModel):
 
 class RemoteTrainStartRequest(BaseModel):
     username: str
-    taskName: str
+    taskName: str = ""
     action: str
 
 

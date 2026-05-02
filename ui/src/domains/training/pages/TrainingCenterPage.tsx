@@ -67,9 +67,11 @@ export default function TrainingCenterPage() {
   const [remoteCheckpointEpochs, setRemoteCheckpointEpochs] = useState(1)
   const [remoteTaskName, setRemoteTaskName] = useState('')
   const [remoteTasks, setRemoteTasks] = useState<Record<string, RemoteTrainingTask>>({})
-  const [remoteServerConnected] = useState(false)
+  const [remoteServerConnected, setRemoteServerConnected] = useState(false)
   const [remoteTrainingPending, setRemoteTrainingPending] = useState(false)
   const [remoteCreateMessage, setRemoteCreateMessage] = useState('')
+  const [selectedRemoteTaskName, setSelectedRemoteTaskName] = useState('')
+  const remoteTaskNames = Object.keys(remoteTasks)
   const remoteTaskCount = Object.keys(remoteTasks).length
 
   useEffect(() => {
@@ -120,6 +122,51 @@ export default function TrainingCenterPage() {
     }
   }
 
+  const endRemoteTraining = async () => {
+    const username = user?.nickname || user?.phone || user?.id || ''
+    if (!selectedRemoteTaskName) return
+    if (!username) {
+      alert('请先登陆')
+      return
+    }
+    setRemoteTrainingPending(true)
+    try {
+      const response = await postJson(REMOTE_TRAINING_START, {
+        username,
+        taskName: selectedRemoteTaskName,
+        action: '结束训练',
+      }) as { message?: string; tasks?: RemoteTrainingTask[] }
+      const nextTasks = Object.fromEntries((response.tasks || []).map(task => [task.taskName, task]))
+      setRemoteTasks(nextTasks)
+      if (!nextTasks[selectedRemoteTaskName]) setSelectedRemoteTaskName('')
+      setRemoteCreateMessage(response.message === 'delete task success' ? '删除任务成功' : '删除任务失败')
+    } finally {
+      setRemoteTrainingPending(false)
+    }
+  }
+
+  const syncRemoteTasks = async () => {
+    const username = user?.nickname || user?.phone || user?.id || ''
+    if (!username) {
+      alert('请先登陆')
+      return
+    }
+    setRemoteTrainingPending(true)
+    try {
+      const response = await postJson(REMOTE_TRAINING_START, {
+        username,
+        action: '任务同步',
+      }) as { message?: string; tasks?: RemoteTrainingTask[] }
+      const nextTasks = Object.fromEntries((response.tasks || []).map(task => [task.taskName, task]))
+      setRemoteTasks(nextTasks)
+      if (selectedRemoteTaskName && !nextTasks[selectedRemoteTaskName]) setSelectedRemoteTaskName('')
+      setRemoteServerConnected(response.message === 'sync success')
+      setRemoteCreateMessage(response.message === 'sync success' ? '同步成功' : '同步失败')
+    } finally {
+      setRemoteTrainingPending(false)
+    }
+  }
+
   return (
     <div className="page-enter flex flex-col h-full overflow-y-auto">
       <div className="border-b border-bd/50 px-6 py-4 bg-sf flex items-center justify-between gap-4">
@@ -164,13 +211,15 @@ export default function TrainingCenterPage() {
                     <span
                       className={`h-2.5 w-2.5 rounded-full ${remoteServerConnected ? 'bg-gn' : 'bg-rd'}`}
                     />
-                    <span>{remoteServerConnected ? '已连接' : '未连接'}</span>
+                    <span>{remoteServerConnected ? '已同步' : '未连接'}</span>
                   </div>
                   <button
                     type="button"
+                    disabled={remoteTrainingPending}
+                    onClick={syncRemoteTasks}
                     className="px-4 py-2 rounded-lg text-sm font-semibold text-ac bg-ac/10 hover:bg-ac/20 transition-colors"
                   >
-                    测试连接状态
+                    任务同步
                   </button>
                 </div>
               </section>
@@ -234,6 +283,29 @@ export default function TrainingCenterPage() {
                       当前任务数量：{remoteTaskCount}
                     </div>
                   </div>
+                </div>
+                <div className="mt-3 flex gap-3 max-[700px]:flex-col">
+                  <label className="flex flex-1 items-center gap-2 text-sm text-tx2 max-[520px]:flex-col max-[520px]:items-stretch">
+                    当前任务
+                    <select
+                      value={selectedRemoteTaskName}
+                      onChange={(e) => setSelectedRemoteTaskName(e.target.value)}
+                      className="flex-1 bg-bg border border-bd text-tx px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-ac"
+                    >
+                      <option value="">请选择任务</option>
+                      {remoteTaskNames.map(name => (
+                        <option key={name} value={name}>{name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    disabled={remoteTrainingPending || !selectedRemoteTaskName}
+                    onClick={endRemoteTraining}
+                    className="px-4 py-2.5 rounded-lg text-sm font-semibold text-white bg-rd hover:bg-rd/90
+                      transition-all active:scale-[0.97] disabled:opacity-25 disabled:cursor-not-allowed"
+                  >
+                    结束任务
+                  </button>
                 </div>
                 {remoteCreateMessage && (
                   <div className="mt-3 text-sm text-tx2">{remoteCreateMessage}</div>
