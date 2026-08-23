@@ -51,6 +51,10 @@ class DifferentialDriveMPCNode(Node):
         self.reference_path = list(reference_path.poses)
         self.reference_path_source = reference_path.source
         self.path_steps = max(1, len(self.reference_path) - 1)
+        self.debug_reference_path_poses = tuple(
+            (pose.x, pose.y, pose.yaw)
+            for pose in self.reference_path[: self.path_steps + 1]
+        )
         self.step_index = 0
         self.finished = False
 
@@ -65,10 +69,7 @@ class DifferentialDriveMPCNode(Node):
             self,
             "/reference_path",
         )
-        self.debug_reference_path_publisher.publish_planar_path(
-            (pose.x, pose.y, pose.yaw)
-            for pose in self.reference_path[: self.path_steps + 1]
-        )
+        self.publish_reference_path()
         self.control_timer = self.create_timer(self.config.dt, self.control_tick)
         self.get_logger().info(
             f"MPC started: {1.0 / self.config.dt:.1f} Hz, "
@@ -104,6 +105,8 @@ class DifferentialDriveMPCNode(Node):
     def control_tick(self) -> None:
         """Solve one MPC step from the latest posture and publish it."""
 
+        self.publish_reference_path()
+
         if self.current_pose is None:
             return
 
@@ -135,6 +138,13 @@ class DifferentialDriveMPCNode(Node):
         message.linear.x = command.linear_speed
         message.angular.z = command.angular_speed
         self.cmd_vel_publisher.publish(message)
+
+    def publish_reference_path(self) -> None:
+        """Republish the debug reference path at the MPC control frequency."""
+
+        self.debug_reference_path_publisher.publish_planar_path(
+            self.debug_reference_path_poses
+        )
 
     def publish_stop(self) -> None:
         """Publish a zero body velocity command."""
