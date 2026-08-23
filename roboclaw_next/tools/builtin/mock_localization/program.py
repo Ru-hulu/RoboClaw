@@ -12,6 +12,7 @@ from pathlib import Path
 
 POSE_SERVICE_NAME = "/mock_localization/get_pose"
 POSE_SERVICE_TYPE = "roboclaw_interfaces/srv/GetMockLocalizationPose"
+ROS_SETUP_PATH = "/opt/ros/humble/setup.bash"
 
 
 class MockLocalizationState(StrEnum):
@@ -63,7 +64,7 @@ class MockLocalizationProcessManager:
 
         repository_root = Path(__file__).resolve().parents[4]
         command = (
-            "source /opt/ros/jazzy/setup.bash >/dev/null 2>&1; "
+            f"source {ROS_SETUP_PATH} >/dev/null 2>&1; "
             "source install/setup.bash >/dev/null 2>&1 || true; "
             f"exec {shlex.quote(sys.executable)} -m "
             "robot_runtime.localization.mock_localization.kinematic_node"
@@ -173,7 +174,7 @@ def _call_pose_service(timeout_sec: float) -> MockLocalizationPose:
     except ImportError as exc:
         raise RuntimeError(
             "ROS 2 Python packages or roboclaw_interfaces are not available. "
-            "Run this tool after sourcing /opt/ros/jazzy/setup.bash and "
+            f"Run this tool after sourcing {ROS_SETUP_PATH} and "
             "install/setup.bash."
         ) from exc
 

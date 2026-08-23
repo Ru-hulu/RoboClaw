@@ -64,8 +64,24 @@ preserve reversing segments.
 
 ## Build
 
-Required system packages are CMake, Boost, OMPL, and OpenCV. Build the
-standalone executable from the repository root:
+Required system packages are CMake, Boost, OMPL, and OpenCV.
+
+For the normal ROS 2 Humble host workflow, build from the repository root with:
+
+```bash
+source /opt/ros/humble/setup.bash
+colcon build --packages-up-to roboclaw_interfaces hybrid_astar
+source install/setup.bash
+```
+
+The Python runner first discovers the installed executable at:
+
+```text
+install/lib/hybrid_astar/hybrid_astar_plan
+```
+
+For standalone planner development without a ROS workspace, build the executable
+from the repository root:
 
 ```bash
 cmake \
@@ -74,7 +90,7 @@ cmake \
 cmake --build robot_runtime/planning/hybrid_astar/build --parallel
 ```
 
-The Python runner discovers the resulting binary at:
+The Python runner also falls back to the standalone binary at:
 
 ```text
 robot_runtime/planning/hybrid_astar/build/hybrid_astar_plan

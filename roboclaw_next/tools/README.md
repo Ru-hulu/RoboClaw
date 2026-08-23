@@ -21,11 +21,11 @@ AgentTool
 
 Current built-in capabilities:
 
-- `integer_addition/`: standalone addition program and its MCP Tool contract.
 - `mock_localization/`: simulated localization process and lifecycle Tools.
-- `path_tracking/`: controller, process manager, and three MCP lifecycle Tool skeletons.
+- `path_tracking/`: MPC path tracking process management Tools.
 - `hybrid_astar_planner/`: one-shot runner and direct path-planning Tool backed by
   the standalone C++ Hybrid A* executable.
+- `openarm_reach/`: OpenArm forward and inverse kinematics planning Tools.
 
 ## MCP Tool-Call Chain
 
@@ -36,3 +36,6 @@ DEEPSEEK_API_KEY=... ROBOCLAW_LLM_PROVIDER=deepseek PYTHONPATH=. \
     uv run --no-project --with openai --with "mcp[cli]<2" \
     python roboclaw_next/examples/RuboclawClient.py
 ```
+
+On the native ROS 2 Humble host workflow, run the client from a shell that has
+already sourced `/opt/ros/humble/setup.bash` and `install/setup.bash`.

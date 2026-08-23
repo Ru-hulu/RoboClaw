@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>hybrid_astar</name>
+  <version>0.0.2</version>
+  <description>Standalone Hybrid A* planner packaged for ROS 2 workspace builds.</description>
+  <maintainer email="maintainer@example.com">RoboClaw</maintainer>
+  <license>BSD</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>libboost-dev</depend>
+  <depend>libompl-dev</depend>
+  <depend>libopencv-dev</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -1,5 +1,9 @@
 # RoboClaw Remote Start Guide
 
+> Legacy note: this document records the old Docker/Jazzy workflow. The remote
+> host has moved to Ubuntu 22.04 + ROS 2 Humble; prefer
+> `docs/RoboClaw_native_host_setup.md` for the no-Docker workflow.
+
 这份说明用于在远程设备上启动 RoboClaw Agent 和 RViz，并通过自然语言 prompt 调用定位、Hybrid A* 路径规划和 MPC 路径跟踪。
 
 ## 1. SSH 到远程设备

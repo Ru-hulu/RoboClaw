@@ -7,6 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(GNUInstallDirs)
 
+find_package(ament_cmake QUIET)
 find_package(Boost REQUIRED)
 find_package(ompl REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core imgcodecs)
@@ -43,20 +44,41 @@ target_link_libraries(hybrid_astar_core
     ${OpenCV_LIBRARIES}
 )
 
+set(HYBRID_ASTAR_DEFAULT_MAP_PATH
+  "${CMAKE_CURRENT_SOURCE_DIR}/maps/empty_80x80.png"
+)
+if(ament_cmake_FOUND)
+  set(HYBRID_ASTAR_DEFAULT_MAP_PATH
+    "${CMAKE_INSTALL_PREFIX}/share/${PROJECT_NAME}/maps/empty_80x80.png"
+  )
+endif()
+
 add_executable(hybrid_astar_plan src/main.cpp)
 target_compile_options(hybrid_astar_plan PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(hybrid_astar_plan PRIVATE
-  HYBRID_ASTAR_DEFAULT_MAP_PATH="${CMAKE_CURRENT_SOURCE_DIR}/maps/empty_80x80.png"
+  HYBRID_ASTAR_DEFAULT_MAP_PATH="${HYBRID_ASTAR_DEFAULT_MAP_PATH}"
 )
 target_link_libraries(hybrid_astar_plan PRIVATE HybridAStar::core)
 
-install(
-  TARGETS hybrid_astar_core hybrid_astar_plan
-  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
+if(ament_cmake_FOUND)
+  install(
+    TARGETS hybrid_astar_core hybrid_astar_plan
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION lib/${PROJECT_NAME}
+  )
+else()
+  install(
+    TARGETS hybrid_astar_core hybrid_astar_plan
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  )
+endif()
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(
   FILES maps/empty_80x80.png
   DESTINATION ${CMAKE_INSTALL_DATADIR}/hybrid_astar/maps
 )
+
+if(ament_cmake_FOUND)
+  ament_package()
+endif()

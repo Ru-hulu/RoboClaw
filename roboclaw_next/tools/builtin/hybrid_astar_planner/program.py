@@ -16,7 +16,10 @@ from .models import HybridAStarPlan
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 PLANNER_ROOT = REPOSITORY_ROOT / "robot_runtime" / "planning" / "hybrid_astar"
 DEFAULT_MAP_PATH = PLANNER_ROOT / "maps" / "empty_80x80.png"
-DEFAULT_EXECUTABLE_PATH = PLANNER_ROOT / "build" / "hybrid_astar_plan"
+DEFAULT_EXECUTABLE_PATH = (
+    REPOSITORY_ROOT / "install" / "lib" / "hybrid_astar" / "hybrid_astar_plan"
+)
+STANDALONE_EXECUTABLE_PATH = PLANNER_ROOT / "build" / "hybrid_astar_plan"
 DEFAULT_PLAN_OUTPUT_PATH = (
     REPOSITORY_ROOT
     / "runtime_data"
@@ -147,20 +150,33 @@ class HybridAStarPlannerRunner:
         return self._store_latest_plan(result)
 
     def _resolve_executable(self) -> Path:
-        executable_path = (self._executable_path or DEFAULT_EXECUTABLE_PATH).resolve()
-        if not executable_path.is_file():
-            raise RuntimeError(
-                f"Hybrid A* executable does not exist: {executable_path}. "
-                "Build it with "
-                "`cmake -S robot_runtime/planning/hybrid_astar "
-                "-B robot_runtime/planning/hybrid_astar/build` followed by "
-                "`cmake --build robot_runtime/planning/hybrid_astar/build`."
-            )
-        if not os.access(executable_path, os.X_OK):
+        for candidate in self._executable_candidates():
+            executable_path = candidate.resolve()
+            if not executable_path.is_file():
+                continue
+            if os.access(executable_path, os.X_OK):
+                return executable_path
             raise RuntimeError(
                 f"Hybrid A* executable is not executable: {executable_path}"
             )
-        return executable_path
+
+        searched = ", ".join(
+            str(candidate.resolve()) for candidate in self._executable_candidates()
+        )
+        raise RuntimeError(
+            "Hybrid A* executable does not exist. Searched: "
+            f"{searched}. Build the ROS 2 workspace with "
+            "`colcon build --packages-up-to roboclaw_interfaces hybrid_astar`, "
+            "or build the standalone planner with "
+            "`cmake -S robot_runtime/planning/hybrid_astar "
+            "-B robot_runtime/planning/hybrid_astar/build` followed by "
+            "`cmake --build robot_runtime/planning/hybrid_astar/build`."
+        )
+
+    def _executable_candidates(self) -> tuple[Path, ...]:
+        if self._executable_path is not None:
+            return (self._executable_path,)
+        return (DEFAULT_EXECUTABLE_PATH, STANDALONE_EXECUTABLE_PATH)
 
     def _store_latest_plan(self, result: HybridAStarPlan) -> HybridAStarPlan:
         """Persist the latest planner result with an atomic file replacement."""
