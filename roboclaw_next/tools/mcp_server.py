@@ -10,17 +10,21 @@ from .builtin.mock_localization.tool import register_mock_localization_tools
 from .builtin.openarm_reach.tool import register_openarm_reach_tools
 from .builtin.path_tracking.program import PathTrackingProcessManager
 from .builtin.path_tracking.tool import register_path_tracking_tools
+from .builtin.sam3_segmentation.program import Sam3WorkerProcessManager
+from .builtin.sam3_segmentation.tool import register_sam3_segmentation_tools
 
 
 mcp = FastMCP("RoboClaw Tool Server", json_response=True)
 
 localization_manager = MockLocalizationProcessManager()
 tracking_manager = PathTrackingProcessManager(localization_manager)
+sam3_manager = Sam3WorkerProcessManager()
 
 register_mock_localization_tools(mcp, localization_manager)
 register_path_tracking_tools(mcp, tracking_manager)
 register_hybrid_astar_planner_tool(mcp)
 register_openarm_reach_tools(mcp)
+register_sam3_segmentation_tools(mcp, sam3_manager)
 
 
 if __name__ == "__main__":
