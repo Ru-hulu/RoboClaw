@@ -1,4 +1,5 @@
 /runtime_data/
+/.worktrees/
 /build/
 /install/
 /log/
@@ -6,3 +7,6 @@
 __pycache__/
 *.py[cod]
 .DS_Store
+*.pt
+*.pth
+*.ckpt
