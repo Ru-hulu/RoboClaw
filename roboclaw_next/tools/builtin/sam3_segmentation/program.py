@@ -153,12 +153,12 @@ class Sam3WorkerProcessManager:
                     (json.dumps(payload, separators=(",", ":")) + "\n").encode(
                         "utf-8"
                     )
-                )
+                ) # 把请求发给 SAM3 worker
                 await process.stdin.drain()
                 response = await _read_worker_message(
                     process.stdout,
                     timeout_sec=config.request_timeout_sec,
-                )
+                ) # 等 worker 返回结果
                 if response.get("request_id") != request_id:
                     raise Sam3RuntimeError(
                         Sam3ErrorCode.WORKER_EXITED,
