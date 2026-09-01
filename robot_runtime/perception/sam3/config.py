@@ -29,7 +29,6 @@ class Sam3RuntimeConfig:
     input_roots: tuple[Path, ...]
     python_executable: str
     device: str = "cuda"
-    idle_timeout_sec: float = 120.0
     request_timeout_sec: float = 120.0
     source_revision: str = PINNED_SOURCE_REVISION
     checkpoint_sha256: str = EXPECTED_CHECKPOINT_SHA256
@@ -91,10 +90,6 @@ class Sam3RuntimeConfig:
         if device not in {"cuda", "cpu"}:
             raise _configuration_error("ROBOCLAW_SAM3_DEVICE must be cuda or cpu.")
 
-        idle_timeout = _positive_float(
-            values.get("ROBOCLAW_SAM3_IDLE_TIMEOUT_SEC", "120"),
-            "ROBOCLAW_SAM3_IDLE_TIMEOUT_SEC",
-        )
         request_timeout = _positive_float(
             values.get("ROBOCLAW_SAM3_REQUEST_TIMEOUT_SEC", "120"),
             "ROBOCLAW_SAM3_REQUEST_TIMEOUT_SEC",
@@ -123,7 +118,6 @@ class Sam3RuntimeConfig:
             input_roots=input_roots,
             python_executable=python_executable,
             device=device,
-            idle_timeout_sec=idle_timeout,
             request_timeout_sec=request_timeout,
             checkpoint_sha256=checkpoint_sha256,
         )

@@ -4,7 +4,13 @@ This directory contains RoboClaw's inference adapter for text-prompted SAM3 imag
 
 ## Runtime model
 
-The FastMCP server stays lightweight. `segment_image_with_sam3` starts a separate Python worker on the first call. The worker loads SAM3 once, serves requests sequentially, and exits after 120 seconds of inactivity by default. `get_sam3_status` remains responsive and reports `busy` during inference. `unload_sam3` can interrupt an in-flight request and releases the worker and its GPU memory; completed result files remain on disk.
+The FastMCP server stays lightweight. `segment_current_view_with_sam3` starts a
+short-lived ROS 2 node for one perception request. That node starts a SAM3 worker,
+waits for the model to load, subscribes to a `sensor_msgs/msg/Image` camera topic,
+segments the requested number of frames, writes an aggregate JSON result, and then
+exits. The SAM3 model is therefore released after each low-frequency perception
+request instead of staying resident while Gazebo or other workloads need GPU
+memory.
 
 The external SAM3 checkout must use:
 
@@ -67,15 +73,17 @@ Set these variables in the process that launches `roboclaw_next.tools.mcp_server
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `ROBOCLAW_SAM3_PYTHON` | MCP process Python | Python executable in the isolated SAM3 environment |
+| `ROBOCLAW_SAM3_PYTHON` | ROS node Python | Python executable in the isolated SAM3 worker environment |
 | `ROBOCLAW_SAM3_SOURCE` | required | External pinned SAM3 checkout |
 | `ROBOCLAW_SAM3_CHECKPOINT` | required | External `sam3.pt` checkpoint |
 | `ROBOCLAW_SAM3_CHECKPOINT_SHA256` | confirmed digest | Digest recorded in results |
 | `ROBOCLAW_SAM3_DEVICE` | `cuda` | `cuda` or `cpu` |
 | `ROBOCLAW_SAM3_INPUT_ROOTS` | repository root | Allowed local input roots separated by the platform path separator |
 | `ROBOCLAW_SAM3_OUTPUT_ROOT` | `runtime_data/sam3` | Result directory root |
-| `ROBOCLAW_SAM3_IDLE_TIMEOUT_SEC` | `120` | Seconds after a completed request before worker eviction |
 | `ROBOCLAW_SAM3_REQUEST_TIMEOUT_SEC` | `120` | Model-start and inference timeout |
+| `ROBOCLAW_SAM3_ROS_PYTHON` | MCP process Python | Python executable that can import `rclpy` |
+| `ROBOCLAW_SAM3_CURRENT_VIEW_OUTPUT_ROOT` | `runtime_data/sam3/current_view` | Aggregate current-view result root |
+| `ROBOCLAW_SAM3_JOB_TIMEOUT_SEC` | `180` | Whole one-shot ROS job timeout |
 
 Example with deployment-neutral paths:
 
@@ -85,8 +93,10 @@ export ROBOCLAW_SAM3_SOURCE=/opt/sam3
 export ROBOCLAW_SAM3_CHECKPOINT=/models/sam3.pt
 export ROBOCLAW_SAM3_INPUT_ROOTS=/data/robot_images
 export ROBOCLAW_SAM3_OUTPUT_ROOT=/var/lib/roboclaw/sam3-results
-export ROBOCLAW_SAM3_IDLE_TIMEOUT_SEC=120
 export ROBOCLAW_SAM3_REQUEST_TIMEOUT_SEC=120
+export ROBOCLAW_SAM3_ROS_PYTHON=/opt/roboclaw-agent-venv/bin/python
+export ROBOCLAW_SAM3_CURRENT_VIEW_OUTPUT_ROOT=/var/lib/roboclaw/sam3-current-view
+export ROBOCLAW_SAM3_JOB_TIMEOUT_SEC=180
 ```
 
 Verify deployment artifacts before the first inference:
@@ -121,17 +131,34 @@ Run the JSON Lines worker manually:
 python -m robot_runtime.perception.sam3 serve
 ```
 
+Run one current-view ROS camera request without MCP:
+
+```bash
+python -m robot_runtime.perception.sam3.ros_node \
+  --request-id "$(python - <<'PY'
+import uuid
+print(uuid.uuid4())
+PY
+)" \
+  --image-topic /head_realsense/color/image_raw \
+  --prompt "red cube" \
+  --confidence 0.5 \
+  --frame-count 3 \
+  --frame-timeout-sec 10 \
+  --result-json runtime_data/sam3/current_view/manual/result.json
+```
+
 The worker writes protocol JSON only to stdout and operator logs to stderr.
 Each protocol message is limited to 4 MiB; an oversized or unreadable message
 stops the worker and returns `WORKER_EXITED` instead of leaking a pipe error.
 
 ## FastMCP tools
 
-- `segment_image_with_sam3(image_path, text_prompt, confidence_threshold=0.5)` starts or reuses the worker and writes one result directory.
-- `get_sam3_status()` reads `stopped`, `starting`, `ready`, or `busy` state without loading the model or waiting for an active inference to finish.
-- `unload_sam3()` interrupts an active inference if necessary, stops the worker, and releases GPU memory without deleting results.
+- `segment_current_view_with_sam3(text_prompt, frame_count=3, confidence_threshold=0.5, image_topic="/head_realsense/color/image_raw")` starts one ROS current-view job and returns the aggregate result read from JSON.
+- `get_sam3_status()` reads the current or most recent one-shot job state without starting the ROS node or loading SAM3.
+- `cancel_sam3_segmentation()` terminates an active one-shot job if it is still running.
 
-Only one inference runs at a time. The MCP response contains scores, pixel boxes, metadata, and paths; it does not place mask arrays or base64 images in the model context.
+Only one current-view job runs at a time. The MCP response contains scores, pixel boxes, metadata, and paths; it does not place mask arrays or base64 images in the model context.
 The request confidence threshold is applied inside the official processor before
 full-resolution mask interpolation, then checked again by RoboClaw while
 normalizing results. This avoids materializing rejected masks on constrained
@@ -139,18 +166,19 @@ GPUs while preserving the public threshold contract.
 
 ## Result files
 
-Each successful request creates exactly one atomic directory:
+Each successful current-view request writes one aggregate JSON file plus per-frame
+SAM3 artifact directories:
 
 ```text
-runtime_data/sam3/<request-id>/
-  result.json
-  masks.npz
-  mask_000.png
-  mask_001.png
-  overlay.png
+runtime_data/sam3/current_view/<request-id>/result.json
+runtime_data/sam3/current_view/<request-id>/frames/frame_000.png
+runtime_data/sam3/<frame-request-id>/result.json
+runtime_data/sam3/<frame-request-id>/masks.npz
+runtime_data/sam3/<frame-request-id>/mask_000.png
+runtime_data/sam3/<frame-request-id>/overlay.png
 ```
 
-`masks.npz` contains a boolean array named `masks` with shape `(N, H, W)`. Every mask PNG is single-channel with values 0 and 255. `result.json` records the input SHA-256, prompt, model revision, checkpoint digest, dimensions, durations, scores, pixel `xyxy` boxes, mask areas, and artifact paths. A no-detection result contains an empty `(0, H, W)` mask array and an overlay of the input image.
+`masks.npz` contains a boolean array named `masks` with shape `(N, H, W)`. Every mask PNG is single-channel with values 0 and 255. The aggregate current-view JSON records the camera topic, prompt, processed frames, best detection score, captured frame paths, and each frame's SAM3 artifact paths. A no-detection frame contains an empty `(0, H, W)` mask array and an overlay of the input image.
 
 Artifacts are written to a hidden temporary sibling directory and renamed only after every file is complete. Existing request directories are never overwritten.
 

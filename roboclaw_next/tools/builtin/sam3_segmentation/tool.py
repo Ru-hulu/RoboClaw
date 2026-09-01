@@ -1,4 +1,4 @@
-"""FastMCP contracts for SAM3 image segmentation and worker lifecycle."""
+"""FastMCP contracts for one-shot SAM3 current-view segmentation."""
 
 from __future__ import annotations
 
@@ -10,11 +10,12 @@ from pydantic import BaseModel, Field
 
 from robot_runtime.perception.sam3.errors import Sam3RuntimeError
 
-from .models import Sam3SegmentationResult
+from .models import Sam3CurrentViewResult
 from .program import (
-    Sam3WorkerProcessManager,
-    Sam3WorkerState,
-    Sam3WorkerStatus,
+    DEFAULT_IMAGE_TOPIC,
+    Sam3JobState,
+    Sam3JobStatus,
+    Sam3OneShotProcessManager,
 )
 
 
@@ -24,39 +25,42 @@ class Sam3ToolErrorResult(BaseModel):
     ok: Literal[False] = False
     error_code: str = Field(description="Stable SAM3 runtime error code.")
     message: str = Field(description="Concise recovery-oriented error message.")
+    result_json_path: str | None = Field(
+        default=None,
+        description="Aggregate JSON path when the ROS node wrote a failure result.",
+    )
 
 
 class Sam3StatusResult(BaseModel):
-    """Current worker process state without starting the model."""
+    """Current or most recent one-shot segmentation job state."""
 
-    state: Sam3WorkerState
+    state: Sam3JobState
     pid: int | None
+    return_code: int | None
     current_request_id: str | None
-    last_activity_at: str | None
-    idle_timeout_sec: float = Field(gt=0.0, allow_inf_nan=False)
-    load_duration_ms: float | None = Field(default=None, ge=0.0, allow_inf_nan=False)
+    last_result_json_path: str | None
     message: str
 
 
 def register_sam3_segmentation_tools(
     mcp: FastMCP,
-    process_manager: Sam3WorkerProcessManager,
+    process_manager: Sam3OneShotProcessManager,
 ) -> None:
-    """Register image inference, status, and unload tools."""
+    """Register current-view segmentation, status, and cancel tools."""
 
     manager = process_manager
 
     @mcp.tool(
-        name="segment_image_with_sam3",
-        title="Segment Image with SAM3",
+        name="segment_current_view_with_sam3",
+        title="Segment Current View with SAM3",
         description=(
-            "Segment objects matching a text prompt in one local image. The image "
-            "must be under a configured allowed input root. Returns scores, pixel "
-            "boxes, mask metadata, worker PID, and paths to result.json, masks.npz, "
-            "per-instance mask PNG files, and overlay.png. It does not process video "
-            "or ROS image topics. The first call may load the model; later calls "
-            "within the idle window reuse it. Use get_sam3_status to inspect the "
-            "worker and unload_sam3 to release GPU memory immediately."
+            "Segment objects matching a text prompt from RoboClaw's current ROS "
+            "camera view. This starts one short-lived ROS node, loads SAM3 for this "
+            "request, subscribes to a sensor_msgs/msg/Image topic, processes the "
+            "requested number of frames, writes an aggregate JSON result, returns "
+            "mask/box/overlay artifact paths, and exits to release GPU memory. Use "
+            "this for low-frequency task-level perception, not continuous video "
+            "tracking."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,
@@ -65,52 +69,72 @@ def register_sam3_segmentation_tools(
             openWorldHint=False,
         ),
     )
-    async def segment_image_with_sam3(
-        image_path: Annotated[
-            str,
-            Field(
-                min_length=1,
-                max_length=4096,
-                description="Local JPEG, PNG, or WebP path under an allowed input root.",
-            ),
-        ],
+    async def segment_current_view_with_sam3(
         text_prompt: Annotated[
             str,
             Field(
                 min_length=1,
                 max_length=256,
-                description="Object category or phrase to segment, such as 'red cup'.",
+                description="Object category or phrase to segment, such as 'red cube'.",
             ),
         ],
+        frame_count: Annotated[
+            int,
+            Field(
+                ge=1,
+                le=10,
+                description="Number of camera frames to segment before exiting.",
+            ),
+        ] = 3,
         confidence_threshold: Annotated[
             float,
             Field(
                 ge=0.0,
                 le=1.0,
                 allow_inf_nan=False,
-                description="Minimum SAM3 score retained in the result.",
+                description="Minimum SAM3 score retained in each frame result.",
             ),
         ] = 0.5,
-    ) -> Sam3SegmentationResult | Sam3ToolErrorResult:
+        image_topic: Annotated[
+            str,
+            Field(
+                min_length=1,
+                max_length=256,
+                description="ROS sensor_msgs/msg/Image topic to sample.",
+            ),
+        ] = DEFAULT_IMAGE_TOPIC,
+        frame_timeout_sec: Annotated[
+            float,
+            Field(
+                gt=0.0,
+                le=60.0,
+                allow_inf_nan=False,
+                description="Maximum seconds to wait for the requested camera frames.",
+            ),
+        ] = 10.0,
+    ) -> Sam3CurrentViewResult | Sam3ToolErrorResult:
         try:
-            result = await manager.infer(
-                image_path,
-                text_prompt,
-                confidence_threshold,
+            return await manager.segment_current_view(
+                text_prompt=text_prompt,
+                frame_count=frame_count,
+                confidence_threshold=confidence_threshold,
+                image_topic=image_topic,
+                frame_timeout_sec=frame_timeout_sec,
             )
         except Sam3RuntimeError as error:
+            status = await manager.get_status()
             return Sam3ToolErrorResult(
                 error_code=error.code.value,
                 message=error.message,
+                result_json_path=status.last_result_json_path,
             )
-        return Sam3SegmentationResult.model_validate({"ok": True, **result})
 
     @mcp.tool(
         name="get_sam3_status",
         title="Get SAM3 Status",
         description=(
-            "Read the SAM3 worker state, PID, model load duration, and idle timeout. "
-            "This tool never starts or loads the SAM3 model."
+            "Read the current or most recent one-shot SAM3 job state. This does not "
+            "start the ROS node or load the SAM3 model."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=True,
@@ -123,11 +147,11 @@ def register_sam3_segmentation_tools(
         return _status_result(await manager.get_status())
 
     @mcp.tool(
-        name="unload_sam3",
-        title="Unload SAM3",
+        name="cancel_sam3_segmentation",
+        title="Cancel SAM3 Segmentation",
         description=(
-            "Stop the SAM3 worker and immediately release its model GPU memory. "
-            "Completed segmentation artifacts are preserved. Repeated calls are safe."
+            "Terminate the active one-shot SAM3 current-view job if it is still "
+            "running. Repeated calls are safe."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,
@@ -136,17 +160,16 @@ def register_sam3_segmentation_tools(
             openWorldHint=False,
         ),
     )
-    async def unload_sam3() -> Sam3StatusResult:
-        return _status_result(await manager.unload())
+    async def cancel_sam3_segmentation() -> Sam3StatusResult:
+        return _status_result(await manager.cancel())
 
 
-def _status_result(status: Sam3WorkerStatus) -> Sam3StatusResult:
+def _status_result(status: Sam3JobStatus) -> Sam3StatusResult:
     return Sam3StatusResult(
         state=status.state,
         pid=status.pid,
+        return_code=status.return_code,
         current_request_id=status.current_request_id,
-        last_activity_at=status.last_activity_at,
-        idle_timeout_sec=status.idle_timeout_sec,
-        load_duration_ms=status.load_duration_ms,
+        last_result_json_path=status.last_result_json_path,
         message=status.message,
     )

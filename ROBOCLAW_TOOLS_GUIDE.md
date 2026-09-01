@@ -2,6 +2,12 @@
 
 本文档以当前仓库实现为准，详细介绍 RoboClaw 工具从定义、注册到被 LLM 调用的完整链路，以及模拟定位、Hybrid A*、MPC 路径跟踪、OpenArm 和 SAM3 的使用方法。
 
+> SAM3 说明：当前代码已从“单张图片输入 + 懒加载常驻 worker”
+> 调整为“当前 ROS 相机视角 + one-shot 分割任务”。新的 MCP 工具是
+> `segment_current_view_with_sam3`、`get_sam3_status` 和
+> `cancel_sam3_segmentation`。第 9 章的旧 worker 细节仍需后续整理，
+> 当前请以 `robot_runtime/perception/sam3/README.md` 和代码为准。
+
 阅读本文后，应该能够回答以下问题：
 
 - RoboClaw 中一个工具定义在哪里，具体实现又在哪里？

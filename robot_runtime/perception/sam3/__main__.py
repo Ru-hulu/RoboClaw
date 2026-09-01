@@ -42,9 +42,12 @@ def main(
         _emit(stdout, payload)
         return 1
 
+    # MCP 或 ROS one-shot 节点使用 serve 分支启动 SAM3 worker。
+    # 模型在 worker 内加载一次，请求通过 stdin/stdout JSON Lines 传递。
     if arguments.command == "serve":
         return Sam3Worker(config, engine_factory).serve(stdin, stdout, stderr)
 
+    # infer 是单次命令行调试入口：当前进程创建 engine，推理一次后退出。
     request_id = str(uuid4())
     try:
         request = Sam3Request.from_dict(

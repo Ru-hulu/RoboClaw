@@ -1,576 +1,406 @@
-"""Lifecycle management for the lazy SAM3 GPU worker process."""
+"""Run one-shot SAM3 ROS current-view jobs and read their JSON results."""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import math
 import os
 import signal
 import sys
-from collections import deque
-from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
 from uuid import uuid4
 
 from pydantic import ValidationError
 
 from robot_runtime.perception.sam3.errors import Sam3ErrorCode, Sam3RuntimeError
 
-from .models import Sam3SegmentationResult
+from .models import Sam3CurrentViewResult
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
-LOGGER = logging.getLogger(__name__)
-DEFAULT_IDLE_TIMEOUT_SEC = 120.0
+DEFAULT_IMAGE_TOPIC = "/head_realsense/color/image_raw"
+DEFAULT_RESULT_ROOT = REPOSITORY_ROOT / "runtime_data" / "sam3" / "current_view"
+DEFAULT_JOB_TIMEOUT_SEC = 180.0
 DEFAULT_TERMINATION_TIMEOUT_SEC = 5.0
-MAX_PROTOCOL_MESSAGE_BYTES = 4 * 1024 * 1024
 
 
-class Sam3WorkerState(StrEnum):
-    """Lifecycle states exposed by the SAM3 manager."""
+class Sam3JobState(StrEnum):
+    """Lifecycle states for the current one-shot SAM3 job."""
 
-    STOPPED = "stopped"
-    STARTING = "starting"
-    READY = "ready"
-    BUSY = "busy"
+    IDLE = "idle"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELED = "canceled"
 
 
 @dataclass(frozen=True)
-class Sam3ManagerConfig:
-    """Process-level settings that do not import the SAM3 runtime environment."""
+class Sam3OneShotConfig:
+    """Process settings for the ROS current-view segmentation node."""
 
-    command: tuple[str, ...]
+    command_prefix: tuple[str, ...]
     cwd: Path
     environment: dict[str, str]
-    idle_timeout_sec: float = 120.0
-    request_timeout_sec: float = 120.0
-    termination_timeout_sec: float = 5.0
+    result_root: Path
+    job_timeout_sec: float = DEFAULT_JOB_TIMEOUT_SEC
+    termination_timeout_sec: float = DEFAULT_TERMINATION_TIMEOUT_SEC
 
     @classmethod
     def from_env(
         cls,
         env: dict[str, str] | None = None,
         repository_root: Path | None = None,
-    ) -> Sam3ManagerConfig:
+    ) -> Sam3OneShotConfig:
         values = dict(os.environ if env is None else env)
         root = (repository_root or REPOSITORY_ROOT).resolve()
         python_executable = values.get(
-            "ROBOCLAW_SAM3_PYTHON",
+            "ROBOCLAW_SAM3_ROS_PYTHON",
             sys.executable,
         ).strip()
         if not python_executable:
-            raise ValueError("ROBOCLAW_SAM3_PYTHON cannot be blank.")
+            raise ValueError("ROBOCLAW_SAM3_ROS_PYTHON cannot be blank.")
+        result_root = _resolve_path(
+            values.get("ROBOCLAW_SAM3_CURRENT_VIEW_OUTPUT_ROOT", "")
+            or str(DEFAULT_RESULT_ROOT),
+            root,
+        )
         return cls(
-            command=(
+            command_prefix=(
                 python_executable,
                 "-m",
-                "robot_runtime.perception.sam3",
-                "serve",
+                "robot_runtime.perception.sam3.ros_node",
             ),
             cwd=root,
             environment=values,
-            idle_timeout_sec=_positive_timeout(
-                values.get("ROBOCLAW_SAM3_IDLE_TIMEOUT_SEC", "120"),
-                "ROBOCLAW_SAM3_IDLE_TIMEOUT_SEC",
+            result_root=result_root,
+            job_timeout_sec=_positive_timeout(
+                values.get("ROBOCLAW_SAM3_JOB_TIMEOUT_SEC", "180"),
+                "ROBOCLAW_SAM3_JOB_TIMEOUT_SEC",
             ),
-            request_timeout_sec=_positive_timeout(
-                values.get("ROBOCLAW_SAM3_REQUEST_TIMEOUT_SEC", "120"),
-                "ROBOCLAW_SAM3_REQUEST_TIMEOUT_SEC",
+            termination_timeout_sec=_positive_timeout(
+                values.get("ROBOCLAW_SAM3_TERMINATION_TIMEOUT_SEC", "5"),
+                "ROBOCLAW_SAM3_TERMINATION_TIMEOUT_SEC",
             ),
         )
 
 
 @dataclass(frozen=True)
-class Sam3WorkerStatus:
-    """Compact process state returned by status and unload tools."""
+class Sam3JobStatus:
+    """Compact state returned by status and cancel tools."""
 
-    state: Sam3WorkerState
+    state: Sam3JobState
     pid: int | None
+    return_code: int | None
     current_request_id: str | None
-    last_activity_at: str | None
-    idle_timeout_sec: float
-    load_duration_ms: float | None
+    last_result_json_path: str | None
     message: str
 
 
-class Sam3WorkerProcessManager:
-    """Start, serialize requests to, and evict one SAM3 worker process."""
+class Sam3OneShotProcessManager:
+    """Start exactly one ROS current-view segmentation job per tool call."""
 
-    def __init__(self, config: Sam3ManagerConfig | None = None) -> None:
+    def __init__(self, config: Sam3OneShotConfig | None = None) -> None:
         self._config = config
-        self._request_lock = asyncio.Lock()
-        self._state_lock = asyncio.Lock()
+        self._lock = asyncio.Lock()
         self._process: asyncio.subprocess.Process | None = None
-        self._state = Sam3WorkerState.STOPPED
+        self._state = Sam3JobState.IDLE
         self._current_request_id: str | None = None
-        self._last_activity_at: str | None = None
-        self._load_duration_ms: float | None = None
-        self._message = "SAM3 worker is not running."
-        self._idle_task: asyncio.Task[None] | None = None
-        self._stderr_task: asyncio.Task[None] | None = None
-        self._stderr_tail: deque[str] = deque(maxlen=100)
-        self._activity_generation = 0
+        self._last_result_json_path: str | None = None
+        self._message = "SAM3 current-view job is idle."
 
-    async def infer(
+    async def segment_current_view(
         self,
-        image_path: str,
+        *,
         text_prompt: str,
+        frame_count: int = 3,
         confidence_threshold: float = 0.5,
-    ) -> dict[str, object]:
-        """Run one serialized request, starting the worker when necessary."""
+        image_topic: str = DEFAULT_IMAGE_TOPIC,
+        frame_timeout_sec: float = 10.0,
+    ) -> Sam3CurrentViewResult:
+        """Run one ROS node job, read the aggregate JSON, then let it exit."""
 
-        async with self._request_lock:
+        _validate_request(
+            text_prompt=text_prompt,
+            frame_count=frame_count,
+            confidence_threshold=confidence_threshold,
+            image_topic=image_topic,
+            frame_timeout_sec=frame_timeout_sec,
+        )
+        async with self._lock:
             config = self._resolve_config()
-            process = await self._ensure_worker()
+            request_id = str(uuid4())
+            result_json_path = config.result_root / request_id / "result.json"
+            command = (
+                *config.command_prefix,
+                "--request-id",
+                request_id,
+                "--image-topic",
+                image_topic,
+                "--prompt",
+                text_prompt.strip(),
+                "--confidence",
+                repr(float(confidence_threshold)),
+                "--frame-count",
+                str(frame_count),
+                "--frame-timeout-sec",
+                repr(float(frame_timeout_sec)),
+                "--result-json",
+                str(result_json_path),
+            )
 
             try:
-                async with self._state_lock:
-                    if self._process is not process:
-                        raise Sam3RuntimeError(
-                            Sam3ErrorCode.WORKER_EXITED,
-                            "SAM3 worker was stopped before inference started.",
-                        )
-                    assert process.stdin is not None
-                    assert process.stdout is not None
-                    self._cancel_idle_locked()
-                    request_id = str(uuid4())
-                    self._state = Sam3WorkerState.BUSY
-                    self._current_request_id = request_id
-                    self._message = "SAM3 inference is running."
-                payload = {
-                    "request_id": request_id,
-                    "image_path": image_path,
-                    "text_prompt": text_prompt,
-                    "confidence_threshold": confidence_threshold,
-                }
-                process.stdin.write(
-                    (json.dumps(payload, separators=(",", ":")) + "\n").encode(
-                        "utf-8"
-                    )
-                ) # 把请求发给 SAM3 worker
-                await process.stdin.drain()
-                response = await _read_worker_message(
-                    process.stdout,
-                    timeout_sec=config.request_timeout_sec,
-                ) # 等 worker 返回结果
-                if response.get("request_id") != request_id:
-                    raise Sam3RuntimeError(
-                        Sam3ErrorCode.WORKER_EXITED,
-                        "SAM3 worker response request_id did not match the active request.",
-                    )
-                if response.get("ok") is not True:
-                    raise _worker_error(response)
-                result = response.get("result")
-                if not isinstance(result, dict):
-                    raise Sam3RuntimeError(
-                        Sam3ErrorCode.WORKER_EXITED,
-                        "SAM3 worker returned a success response without a result object.",
-                    )
-                result = dict(result)
-                result["worker_pid"] = process.pid
-                result.setdefault("model_load_duration_ms", self._load_duration_ms)
-                try:
-                    Sam3SegmentationResult.model_validate({"ok": True, **result})
-                except ValidationError as error:
-                    raise Sam3RuntimeError(
-                        Sam3ErrorCode.WORKER_EXITED,
-                        "SAM3 worker returned an invalid success result.",
-                    ) from error
-                async with self._state_lock:
-                    if self._process is not process:
-                        raise Sam3RuntimeError(
-                            Sam3ErrorCode.WORKER_EXITED,
-                            "SAM3 worker was stopped before its result was accepted.",
-                        )
-                    self._mark_ready_locked("SAM3 inference completed.")
-            except asyncio.CancelledError:
-                await self._stop_after_cancellation(
-                    process,
-                    "SAM3 worker stopped after request cancellation.",
+                self._state = Sam3JobState.RUNNING
+                self._current_request_id = request_id
+                self._last_result_json_path = str(result_json_path)
+                self._message = "SAM3 current-view segmentation is running."
+                self._process = await asyncio.create_subprocess_exec(
+                    *command,
+                    cwd=config.cwd,
+                    env=config.environment,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    start_new_session=(os.name != "nt"),
                 )
-                raise
+            except OSError as error:
+                self._state = Sam3JobState.FAILED
+                self._current_request_id = None
+                self._message = "SAM3 current-view ROS node could not be started."
+                raise Sam3RuntimeError(
+                    Sam3ErrorCode.WORKER_EXITED,
+                    self._message,
+                ) from error
+
+            process = self._process
+            assert process is not None
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=config.job_timeout_sec,
+                )
             except TimeoutError as error:
-                await self._stop_process(
-                    process,
-                    "SAM3 worker stopped after request timeout.",
+                await self._terminate_process(process, config)
+                self._state = Sam3JobState.FAILED
+                self._current_request_id = None
+                self._message = (
+                    f"SAM3 current-view job timed out after "
+                    f"{config.job_timeout_sec:g} seconds."
                 )
                 raise Sam3RuntimeError(
                     Sam3ErrorCode.INFERENCE_TIMEOUT,
-                    "SAM3 inference exceeded the configured request timeout.",
+                    self._message,
                 ) from error
-            except (BrokenPipeError, ConnectionError) as error:
-                await self._stop_process(
-                    process,
-                    "SAM3 worker pipe closed unexpectedly.",
-                )
-                raise Sam3RuntimeError(
-                    Sam3ErrorCode.WORKER_EXITED,
-                    "SAM3 worker exited before returning a result.",
-                ) from error
-            except Sam3RuntimeError as error:
-                if error.code in {
-                    Sam3ErrorCode.WORKER_EXITED,
-                    Sam3ErrorCode.GPU_OOM,
-                    Sam3ErrorCode.MODEL_UNAVAILABLE,
-                }:
-                    await self._stop_process(
-                        process,
-                        f"SAM3 worker stopped after {error.code.value}."
-                    )
-                else:
-                    async with self._state_lock:
-                        if self._process is process:
-                            self._mark_ready_locked(
-                                "SAM3 worker rejected the request."
-                            )
+            except asyncio.CancelledError:
+                await self._terminate_process(process, config)
+                self._state = Sam3JobState.CANCELED
+                self._current_request_id = None
+                self._message = "SAM3 current-view job was canceled."
                 raise
 
+            stderr_message = stderr.decode("utf-8", errors="replace").strip()
+            stdout_message = stdout.decode("utf-8", errors="replace").strip()
+            if process.returncode != 0:
+                self._state = Sam3JobState.FAILED
+                self._current_request_id = None
+                self._message = _compact_message(
+                    stderr_message or stdout_message or "SAM3 current-view job failed."
+                )
+                raise _result_or_process_error(result_json_path, self._message)
+
+            try:
+                result = _read_result_json(result_json_path)
+            except Sam3RuntimeError as error:
+                self._state = Sam3JobState.FAILED
+                self._current_request_id = None
+                self._message = error.message
+                raise
+
+            self._state = Sam3JobState.SUCCEEDED
+            self._current_request_id = None
+            self._message = result.message
             return result
 
-    async def get_status(self) -> Sam3WorkerStatus:
-        """Read lifecycle state without starting the worker."""
+    async def get_status(self) -> Sam3JobStatus:
+        """Read the current or most recent one-shot job state."""
 
-        async with self._state_lock:
-            if self._process is not None and self._process.returncode is not None:
-                await self._stop_locked("SAM3 worker exited unexpectedly.")
-            return self._status_locked()
+        self._refresh_state()
+        return self._status()
 
-    async def unload(self) -> Sam3WorkerStatus:
-        """Stop the worker and release model VRAM; repeated calls are safe."""
+    async def cancel(self) -> Sam3JobStatus:
+        """Terminate the active one-shot job if it is still running."""
 
-        async with self._state_lock:
-            if self._process is None:
-                self._state = Sam3WorkerState.STOPPED
-                self._message = "SAM3 worker is not running."
-                self._cancel_idle_locked()
-            else:
-                await self._stop_locked("SAM3 worker unloaded explicitly.")
-            return self._status_locked()
+        self._refresh_state()
+        if self._process is None or self._process.returncode is not None:
+            self._state = Sam3JobState.IDLE
+            self._current_request_id = None
+            self._message = "No SAM3 current-view job is running."
+            return self._status()
 
-    async def _ensure_worker(self) -> asyncio.subprocess.Process:
-        config = self._resolve_config()
-        process: asyncio.subprocess.Process | None = None
-        try:
-            async with self._state_lock:
-                if self._process is not None and self._process.returncode is None:
-                    if self._state in {
-                        Sam3WorkerState.READY,
-                        Sam3WorkerState.BUSY,
-                    }:
-                        return self._process
-                if self._process is not None:
-                    await self._stop_locked("Discarded an exited SAM3 worker.")
+        await self._terminate_process(self._process, self._resolve_config())
+        self._state = Sam3JobState.CANCELED
+        self._current_request_id = None
+        self._message = "SAM3 current-view job was canceled."
+        return self._status()
 
-                self._state = Sam3WorkerState.STARTING
-                self._message = "SAM3 worker is loading the model."
-                subprocess_options: dict[str, Any] = {}
-                if os.name != "nt":
-                    subprocess_options["start_new_session"] = True
-                process = await asyncio.create_subprocess_exec(
-                    *config.command,
-                    cwd=config.cwd,
-                    env=config.environment,
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    limit=MAX_PROTOCOL_MESSAGE_BYTES,
-                    **subprocess_options,
-                )
-                self._process = process
-                assert process.stderr is not None
-                self._stderr_tail.clear()
-                self._stderr_task = asyncio.create_task(
-                    self._drain_stderr(process.stderr)
-                )
-        except asyncio.CancelledError:
-            await self._stop_after_cancellation(
-                process,
-                "SAM3 worker stopped after startup cancellation.",
-            )
-            raise
-        except OSError as error:
-            async with self._state_lock:
-                self._state = Sam3WorkerState.STOPPED
-                self._message = "SAM3 worker could not be started."
-            raise Sam3RuntimeError(
-                Sam3ErrorCode.WORKER_EXITED,
-                "SAM3 worker process could not be started.",
-            ) from error
-
-        assert process is not None
-        assert process.stdout is not None
-        try:
-            ready = await _read_worker_message(
-                process.stdout,
-                timeout_sec=config.request_timeout_sec,
-            )
-        except asyncio.CancelledError:
-            await self._stop_after_cancellation(
-                process,
-                "SAM3 worker stopped after startup cancellation.",
-            )
-            raise
-        except TimeoutError as error:
-            await self._stop_process(
-                process,
-                "SAM3 worker stopped after startup timeout.",
-            )
-            raise Sam3RuntimeError(
-                Sam3ErrorCode.INFERENCE_TIMEOUT,
-                "SAM3 worker model load exceeded the configured request timeout.",
-            ) from error
-        except Sam3RuntimeError:
-            await self._stop_process(
-                process,
-                "SAM3 worker emitted an invalid startup response.",
-            )
-            raise
-
-        if ready.get("event") == "startup_error":
-            error = _worker_error(ready)
-            await self._stop_process(
-                process,
-                f"SAM3 worker startup failed with {error.code.value}."
-            )
-            raise error
-        if ready.get("event") != "ready":
-            await self._stop_process(
-                process,
-                "SAM3 worker did not emit a ready event.",
-            )
-            raise Sam3RuntimeError(
-                Sam3ErrorCode.WORKER_EXITED,
-                "SAM3 worker did not emit the required ready event.",
-            )
-        duration = ready.get("load_duration_ms")
+    def _refresh_state(self) -> None:
         if (
-            isinstance(duration, bool)
-            or not isinstance(duration, (int, float))
-            or not math.isfinite(float(duration))
-            or float(duration) < 0.0
+            self._process is not None
+            and self._process.returncode is not None
+            and self._state == Sam3JobState.RUNNING
         ):
-            await self._stop_process(
-                process,
-                "SAM3 worker emitted an invalid ready event.",
+            self._state = (
+                Sam3JobState.SUCCEEDED
+                if self._process.returncode == 0
+                else Sam3JobState.FAILED
             )
-            raise Sam3RuntimeError(
-                Sam3ErrorCode.WORKER_EXITED,
-                "SAM3 worker ready event did not contain a valid load duration.",
+            self._current_request_id = None
+            self._message = (
+                "SAM3 current-view job completed."
+                if self._process.returncode == 0
+                else "SAM3 current-view job exited unexpectedly."
             )
-        async with self._state_lock:
-            if self._process is not process:
-                raise Sam3RuntimeError(
-                    Sam3ErrorCode.WORKER_EXITED,
-                    "SAM3 worker was stopped while loading the model.",
-                )
-            self._load_duration_ms = float(duration)
-            self._state = Sam3WorkerState.READY
-            self._last_activity_at = _now_iso()
-            self._message = "SAM3 worker is ready."
-        return process
 
-    async def _stop_process(
-        self,
-        process: asyncio.subprocess.Process | None,
-        message: str,
-    ) -> None:
-        async with self._state_lock:
-            if process is not None and self._process is not process:
-                return
-            await self._stop_locked(message)
-
-    async def _stop_after_cancellation(
-        self,
-        process: asyncio.subprocess.Process | None,
-        message: str,
-    ) -> None:
-        cleanup = asyncio.create_task(self._stop_process(process, message))
-        try:
-            await asyncio.shield(cleanup)
-        except asyncio.CancelledError:
-            await cleanup
-
-    def _mark_ready_locked(self, message: str) -> None:
-        self._state = Sam3WorkerState.READY
-        self._current_request_id = None
-        self._last_activity_at = _now_iso()
-        self._message = message
-        self._activity_generation += 1
-        generation = self._activity_generation
-        self._cancel_idle_locked()
-        self._idle_task = asyncio.create_task(self._evict_after_idle(generation))
-
-    async def _evict_after_idle(self, generation: int) -> None:
-        try:
-            await asyncio.sleep(self._idle_timeout_sec)
-            async with self._state_lock:
-                if (
-                    generation == self._activity_generation
-                    and self._state == Sam3WorkerState.READY
-                ):
-                    await self._stop_locked(
-                        "SAM3 worker stopped after the idle timeout."
-                    )
-        except asyncio.CancelledError:
-            return
-
-    async def _stop_locked(self, message: str) -> None:
-        self._cancel_idle_locked()
-        process = self._process
-        if process is not None and process.returncode is None:
-            try:
-                if os.name != "nt":
-                    os.killpg(process.pid, signal.SIGTERM)
-                else:
-                    process.terminate()
-            except (OSError, ProcessLookupError):
-                pass
-            try:
-                await asyncio.wait_for(
-                    process.wait(),
-                    timeout=self._termination_timeout_sec,
-                )
-            except TimeoutError:
-                try:
-                    if os.name != "nt":
-                        os.killpg(process.pid, signal.SIGKILL)
-                    else:
-                        process.kill()
-                except (OSError, ProcessLookupError):
-                    pass
-                await process.wait()
-
-        stderr_task = self._stderr_task
-        self._stderr_task = None
-        if stderr_task is not None and stderr_task is not asyncio.current_task():
-            stderr_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await stderr_task
-        self._process = None
-        self._state = Sam3WorkerState.STOPPED
-        self._current_request_id = None
-        self._load_duration_ms = None
-        self._last_activity_at = _now_iso()
-        self._message = message
-
-    def _cancel_idle_locked(self) -> None:
-        idle_task = self._idle_task
-        self._idle_task = None
-        if idle_task is not None and idle_task is not asyncio.current_task():
-            idle_task.cancel()
-
-    async def _drain_stderr(
-        self,
-        stream: asyncio.StreamReader,
-    ) -> None:
-        while line := await stream.readline():
-            decoded = line.decode("utf-8", errors="replace").rstrip()
-            self._stderr_tail.append(decoded)
-            sanitized = "".join(
-                character if character >= " " or character == "\t" else "�"
-                for character in decoded
-            )[:2000]
-            LOGGER.warning("SAM3 worker stderr: %s", sanitized)
-
-    def _status_locked(self) -> Sam3WorkerStatus:
-        return Sam3WorkerStatus(
+    def _status(self) -> Sam3JobStatus:
+        return Sam3JobStatus(
             state=self._state,
             pid=self._process.pid if self._process is not None else None,
+            return_code=(
+                self._process.returncode if self._process is not None else None
+            ),
             current_request_id=self._current_request_id,
-            last_activity_at=self._last_activity_at,
-            idle_timeout_sec=self._idle_timeout_sec,
-            load_duration_ms=self._load_duration_ms,
+            last_result_json_path=self._last_result_json_path,
             message=self._message,
         )
 
-    def _resolve_config(self) -> Sam3ManagerConfig:
+    def _resolve_config(self) -> Sam3OneShotConfig:
         if self._config is not None:
             return self._config
         try:
-            self._config = Sam3ManagerConfig.from_env()
+            self._config = Sam3OneShotConfig.from_env()
         except ValueError as error:
             raise Sam3RuntimeError(
                 Sam3ErrorCode.MODEL_UNAVAILABLE,
-                f"Invalid SAM3 manager configuration: {error}",
+                f"Invalid SAM3 one-shot configuration: {error}",
             ) from error
         return self._config
 
-    @property
-    def _idle_timeout_sec(self) -> float:
-        if self._config is None:
-            return DEFAULT_IDLE_TIMEOUT_SEC
-        return self._config.idle_timeout_sec
-
-    @property
-    def _termination_timeout_sec(self) -> float:
-        if self._config is None:
-            return DEFAULT_TERMINATION_TIMEOUT_SEC
-        return self._config.termination_timeout_sec
-
-
-def _decode_worker_message(raw_message: bytes) -> dict[str, object]:
-    if not raw_message:
-        raise Sam3RuntimeError(
-            Sam3ErrorCode.WORKER_EXITED,
-            "SAM3 worker exited without returning a protocol message.",
-        )
-    try:
-        payload = json.loads(raw_message.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise Sam3RuntimeError(
-            Sam3ErrorCode.WORKER_EXITED,
-            "SAM3 worker returned malformed JSON.",
-        ) from error
-    if not isinstance(payload, dict):
-        raise Sam3RuntimeError(
-            Sam3ErrorCode.WORKER_EXITED,
-            "SAM3 worker protocol message must be a JSON object.",
-        )
-    return payload
+    async def _terminate_process(
+        self,
+        process: asyncio.subprocess.Process,
+        config: Sam3OneShotConfig,
+    ) -> None:
+        if process.returncode is not None:
+            return
+        try:
+            if os.name != "nt":
+                os.killpg(process.pid, signal.SIGTERM)
+            else:
+                process.terminate()
+        except (OSError, ProcessLookupError):
+            return
+        try:
+            await asyncio.wait_for(process.wait(), timeout=config.termination_timeout_sec)
+        except TimeoutError:
+            try:
+                if os.name != "nt":
+                    os.killpg(process.pid, signal.SIGKILL)
+                else:
+                    process.kill()
+            except (OSError, ProcessLookupError):
+                return
+            await process.wait()
 
 
-async def _read_worker_message(
-    stream: asyncio.StreamReader,
+def _validate_request(
     *,
-    timeout_sec: float,
-) -> dict[str, object]:
-    try:
-        raw_message = await asyncio.wait_for(
-            stream.readline(),
-            timeout=timeout_sec,
+    text_prompt: str,
+    frame_count: int,
+    confidence_threshold: float,
+    image_topic: str,
+    frame_timeout_sec: float,
+) -> None:
+    if not text_prompt.strip():
+        raise Sam3RuntimeError(Sam3ErrorCode.INVALID_INPUT, "text_prompt is required.")
+    if frame_count <= 0:
+        raise Sam3RuntimeError(
+            Sam3ErrorCode.INVALID_INPUT,
+            "frame_count must be greater than zero.",
         )
-    except TimeoutError:
-        raise
-    except (OSError, ValueError) as error:
+    if (
+        isinstance(confidence_threshold, bool)
+        or not math.isfinite(float(confidence_threshold))
+        or not 0.0 <= float(confidence_threshold) <= 1.0
+    ):
+        raise Sam3RuntimeError(
+            Sam3ErrorCode.INVALID_INPUT,
+            "confidence_threshold must be between 0.0 and 1.0.",
+        )
+    if not image_topic.strip() or not image_topic.startswith("/"):
+        raise Sam3RuntimeError(
+            Sam3ErrorCode.INVALID_INPUT,
+            "image_topic must be an absolute ROS topic name.",
+        )
+    if not math.isfinite(frame_timeout_sec) or frame_timeout_sec <= 0.0:
+        raise Sam3RuntimeError(
+            Sam3ErrorCode.INVALID_INPUT,
+            "frame_timeout_sec must be greater than zero.",
+        )
+
+
+def _read_result_json(path: Path) -> Sam3CurrentViewResult:
+    if not path.is_file():
         raise Sam3RuntimeError(
             Sam3ErrorCode.WORKER_EXITED,
-            "SAM3 worker protocol message exceeded the size limit or could not be read.",
-        ) from error
-    return _decode_worker_message(raw_message)
-
-
-def _worker_error(payload: dict[str, object]) -> Sam3RuntimeError:
-    error_payload = payload.get("error")
-    if not isinstance(error_payload, dict):
-        return Sam3RuntimeError(
-            Sam3ErrorCode.WORKER_EXITED,
-            "SAM3 worker returned an invalid error response.",
+            f"SAM3 current-view result JSON was not written: {path}",
         )
-    code_value = error_payload.get("code")
-    message = error_payload.get("message")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise Sam3RuntimeError(
+            Sam3ErrorCode.WORKER_EXITED,
+            f"SAM3 current-view result JSON is invalid: {path}",
+        ) from error
+    if isinstance(payload, dict) and payload.get("ok") is False:
+        raise _error_from_payload(payload)
+    try:
+        return Sam3CurrentViewResult.model_validate(payload)
+    except ValidationError as error:
+        raise Sam3RuntimeError(
+            Sam3ErrorCode.WORKER_EXITED,
+            f"SAM3 current-view result JSON does not match the MCP schema: {path}",
+        ) from error
+
+
+def _result_or_process_error(path: Path, process_message: str) -> Sam3RuntimeError:
+    if path.is_file():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = None
+        if isinstance(payload, dict) and payload.get("ok") is False:
+            return _error_from_payload(payload)
+    return Sam3RuntimeError(Sam3ErrorCode.WORKER_EXITED, process_message)
+
+
+def _error_from_payload(payload: dict[str, object]) -> Sam3RuntimeError:
+    code_value = payload.get("error_code")
+    message = payload.get("message")
     try:
         code = Sam3ErrorCode(str(code_value))
     except ValueError:
         code = Sam3ErrorCode.WORKER_EXITED
     if not isinstance(message, str) or not message:
-        message = "SAM3 worker returned an error without a recovery message."
+        message = "SAM3 current-view job failed."
     return Sam3RuntimeError(code, message)
+
+
+def _resolve_path(value: str, repository_root: Path) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = repository_root / path
+    return path.resolve()
 
 
 def _positive_timeout(value: str, variable: str) -> float:
@@ -583,5 +413,5 @@ def _positive_timeout(value: str, variable: str) -> float:
     return parsed
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _compact_message(message: str) -> str:
+    return " ".join(message.split())[-1000:]
