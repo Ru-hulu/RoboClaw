@@ -26,6 +26,11 @@ Current built-in capabilities:
 - `hybrid_astar_planner/`: one-shot runner and direct path-planning Tool backed by
   the standalone C++ Hybrid A* executable.
 - `openarm_reach/`: OpenArm forward and inverse kinematics planning Tools.
+- `gazebo_realsense_camera/`: Gazebo RealSense RGB-D listener lifecycle Tools:
+  `start_gazebo_realsense_camera`, `get_gazebo_realsense_camera_status`, and
+  `stop_gazebo_realsense_camera`. The listener relays images to LCM channels
+  `ROBOCLAW_REALSENSE_COLOR_IMAGE` and `ROBOCLAW_REALSENSE_DEPTH_IMAGE`.
+- `sam3_segmentation/`: one-shot SAM3 current-view segmentation Tools.
 
 ## MCP Tool-Call Chain
 

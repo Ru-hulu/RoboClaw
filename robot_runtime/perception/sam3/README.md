@@ -158,7 +158,13 @@ stops the worker and returns `WORKER_EXITED` instead of leaking a pipe error.
 - `get_sam3_status()` reads the current or most recent one-shot job state without starting the ROS node or loading SAM3.
 - `cancel_sam3_segmentation()` terminates an active one-shot job if it is still running.
 
-Only one current-view job runs at a time. The MCP response contains scores, pixel boxes, metadata, and paths; it does not place mask arrays or base64 images in the model context.
+`segment_current_view_with_sam3` also accepts optional `depth_image_topic`
+and `camera_calibration` inputs for the future 3D target pose pipeline. The
+current implementation records those inputs but still runs 2D SAM3 segmentation
+only, so `target_object_pose_valid` is always `false` and
+`target_object_pose_matrix` is the 4x4 identity matrix.
+
+Only one current-view job runs at a time. The MCP response contains scores, pixel boxes, metadata, target pose placeholders, and paths; it does not place mask arrays or base64 images in the model context.
 The request confidence threshold is applied inside the official processor before
 full-resolution mask interpolation, then checked again by RoboClaw while
 normalizing results. This avoids materializing rejected masks on constrained

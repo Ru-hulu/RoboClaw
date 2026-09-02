@@ -33,6 +33,24 @@ SUPPORTED_ENCODINGS = {
     "bgra8": 4,
     "mono8": 1,
 }
+IDENTITY_MATRIX_4X4 = [
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+]
 
 
 class Sam3CurrentViewNode(Node):
@@ -242,9 +260,11 @@ class Sam3CurrentViewNode(Node):
                 break
         return {
             "ok": True,
-            "schema_version": 1,
+            "schema_version": 2,
             "request_id": self.arguments.request_id,
             "image_topic": self.arguments.image_topic,
+            "depth_image_topic": self.arguments.depth_image_topic,
+            "camera_calibration": self.arguments.camera_calibration,
             "text_prompt": self.arguments.prompt,
             "confidence_threshold": self.arguments.confidence,
             "requested_frame_count": self.arguments.frame_count,
@@ -259,6 +279,8 @@ class Sam3CurrentViewNode(Node):
             "best_frame_index": best_frame_index,
             "best_instance_index": best_instance_index,
             "best_score": best_score,
+            "target_object_pose_valid": False,
+            "target_object_pose_matrix": list(IDENTITY_MATRIX_4X4),
             "message": (
                 f"SAM3 segmented {len(self.frames)} frame(s) from "
                 f"{self.arguments.image_topic}."
@@ -330,6 +352,8 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="One-shot SAM3 current-view node")
     parser.add_argument("--request-id", required=True)
     parser.add_argument("--image-topic", required=True)
+    parser.add_argument("--depth-image-topic", default="")
+    parser.add_argument("--camera-calibration-json", default="")
     parser.add_argument("--prompt", required=True)
     parser.add_argument("--confidence", type=float, required=True)
     parser.add_argument("--frame-count", type=int, required=True)
@@ -341,6 +365,16 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         parser.error("--prompt is required")
     if not arguments.image_topic.startswith("/"):
         parser.error("--image-topic must be an absolute ROS topic name")
+    arguments.depth_image_topic = arguments.depth_image_topic.strip() or None
+    if (
+        arguments.depth_image_topic is not None
+        and not arguments.depth_image_topic.startswith("/")
+    ):
+        parser.error("--depth-image-topic must be an absolute ROS topic name")
+    arguments.camera_calibration = _parse_camera_calibration_json(
+        arguments.camera_calibration_json,
+        parser,
+    )
     if arguments.frame_count <= 0:
         parser.error("--frame-count must be greater than zero")
     if not math.isfinite(arguments.confidence) or not 0.0 <= arguments.confidence <= 1.0:
@@ -350,6 +384,45 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     if not math.isfinite(arguments.worker_timeout_sec) or arguments.worker_timeout_sec <= 0:
         parser.error("--worker-timeout-sec must be greater than zero")
     return arguments
+
+
+def _parse_camera_calibration_json(
+    value: str,
+    parser: argparse.ArgumentParser,
+) -> dict[str, object] | None:
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        parser.error("--camera-calibration-json must be valid JSON")
+    if not isinstance(payload, dict):
+        parser.error("--camera-calibration-json must be a JSON object")
+    return {
+        "intrinsic_matrix": _read_matrix(payload, "intrinsic_matrix", 9, parser),
+        "extrinsic_matrix": _read_matrix(payload, "extrinsic_matrix", 16, parser),
+    }
+
+
+def _read_matrix(
+    payload: dict[str, object],
+    key: str,
+    expected_size: int,
+    parser: argparse.ArgumentParser,
+) -> list[float]:
+    value = payload.get(key)
+    if not isinstance(value, list) or len(value) != expected_size:
+        parser.error(f"--camera-calibration-json {key} must contain {expected_size} values")
+    matrix: list[float] = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            parser.error(f"--camera-calibration-json {key} values must be numbers")
+        number = float(item)
+        if not math.isfinite(number):
+            parser.error(f"--camera-calibration-json {key} values must be finite")
+        matrix.append(number)
+    return matrix
 
 
 def _ros_image_to_pil(message: RosImage) -> Image.Image:
@@ -469,14 +542,18 @@ def _failure_payload(
 ) -> dict[str, object]:
     return {
         "ok": False,
-        "schema_version": 1,
+        "schema_version": 2,
         "request_id": arguments.request_id,
         "image_topic": arguments.image_topic,
+        "depth_image_topic": arguments.depth_image_topic,
+        "camera_calibration": arguments.camera_calibration,
         "text_prompt": arguments.prompt,
         "confidence_threshold": arguments.confidence,
         "requested_frame_count": arguments.frame_count,
         "processed_frame_count": 0,
         "result_json_path": str(Path(arguments.result_json).expanduser().resolve()),
+        "target_object_pose_valid": False,
+        "target_object_pose_matrix": list(IDENTITY_MATRIX_4X4),
         "error_code": error.code.value,
         "message": error.message,
     }

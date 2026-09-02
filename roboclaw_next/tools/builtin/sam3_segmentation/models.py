@@ -4,7 +4,43 @@ from __future__ import annotations
 
 from typing import Literal, Self
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, FiniteFloat, model_validator
+
+
+def _identity_matrix_4x4() -> list[float]:
+    return [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    ]
+
+
+class CameraCalibrationInput(BaseModel):
+    """Camera geometry reserved for future 3D target pose estimation."""
+
+    intrinsic_matrix: list[FiniteFloat] = Field(
+        min_length=9,
+        max_length=9,
+        description="Row-major 3x3 camera intrinsic matrix.",
+    )
+    extrinsic_matrix: list[FiniteFloat] = Field(
+        min_length=16,
+        max_length=16,
+        description="Row-major 4x4 camera extrinsic transform matrix.",
+    )
 
 
 class Sam3InstanceResult(BaseModel):
@@ -57,9 +93,17 @@ class Sam3CurrentViewResult(BaseModel):
     """Aggregate result for one one-shot current-view segmentation job."""
 
     ok: Literal[True] = True
-    schema_version: Literal[1]
+    schema_version: Literal[2]
     request_id: str
     image_topic: str
+    depth_image_topic: str | None = Field(
+        default=None,
+        description="ROS depth image topic reserved for future 3D pose estimation.",
+    )
+    camera_calibration: CameraCalibrationInput | None = Field(
+        default=None,
+        description="Camera intrinsics/extrinsics reserved for future 3D pose estimation.",
+    )
     text_prompt: str
     confidence_threshold: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
     requested_frame_count: int = Field(gt=0)
@@ -74,6 +118,15 @@ class Sam3CurrentViewResult(BaseModel):
     best_frame_index: int | None = Field(default=None, ge=0)
     best_instance_index: int | None = Field(default=None, ge=0)
     best_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    target_object_pose_valid: bool = Field(
+        description="Whether target_object_pose_matrix is a valid object pose estimate.",
+    )
+    target_object_pose_matrix: list[FiniteFloat] = Field(
+        default_factory=_identity_matrix_4x4,
+        min_length=16,
+        max_length=16,
+        description="Row-major 4x4 target object pose matrix.",
+    )
     message: str
 
     @model_validator(mode="after")

@@ -248,6 +248,38 @@ def _add_head_realsense(root: ET.Element) -> None:
     _add_text(plugin, "camera_name", "color")
     _add_text(plugin, "frame_name", camera_link_name)
 
+    depth_sensor = ET.SubElement(
+        camera_gazebo,
+        "sensor",
+        {"name": "head_realsense_depth", "type": "depth"},
+    )
+    _add_text(depth_sensor, "always_on", "true")
+    _add_text(depth_sensor, "update_rate", "15")
+    _add_text(depth_sensor, "visualize", "true")
+    depth_camera = ET.SubElement(depth_sensor, "camera")
+    _add_text(depth_camera, "horizontal_fov", "1.211")
+    depth_image = ET.SubElement(depth_camera, "image")
+    _add_text(depth_image, "width", "640")
+    _add_text(depth_image, "height", "480")
+    _add_text(depth_image, "format", "R_FLOAT32")
+    depth_clip = ET.SubElement(depth_camera, "clip")
+    _add_text(depth_clip, "near", "0.05")
+    _add_text(depth_clip, "far", "10.0")
+    depth_plugin = ET.SubElement(
+        depth_sensor,
+        "plugin",
+        {
+            "name": "head_realsense_depth_controller",
+            "filename": "libgazebo_ros_camera.so",
+        },
+    )
+    depth_ros = ET.SubElement(depth_plugin, "ros")
+    _add_text(depth_ros, "namespace", "/head_realsense")
+    _add_text(depth_plugin, "camera_name", "depth")
+    _add_text(depth_plugin, "frame_name", camera_link_name)
+    _add_text(depth_plugin, "min_depth", "0.05")
+    _add_text(depth_plugin, "max_depth", "10.0")
+
 
 def _replace_ros2_control_with_single_gazebo_system(root: ET.Element) -> None:
     joints: list[ET.Element] = []

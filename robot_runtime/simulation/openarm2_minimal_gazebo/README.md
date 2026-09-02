@@ -76,6 +76,7 @@ ros2 control list_controllers
 ## Head Camera
 
 The head camera link is named `head_realsense_link`. It is fixed to the robot
-body at the head position and pitched downward. Gazebo publishes RGB images
-through the `libgazebo_ros_camera.so` plugin under the `/head_realsense`
-namespace.
+body at the head position and pitched downward. Gazebo publishes RGB and depth
+images through camera plugins under the `/head_realsense` namespace. The default
+capture topics are `/head_realsense/color/image_raw` and
+`/head_realsense/depth/image_raw`.

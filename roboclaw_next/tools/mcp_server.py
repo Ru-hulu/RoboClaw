@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
+from .builtin.gazebo_realsense_camera.tool import register_gazebo_realsense_camera_tool
 from .builtin.hybrid_astar_planner.tool import register_hybrid_astar_planner_tool
 from .builtin.mock_localization.program import MockLocalizationProcessManager
 from .builtin.mock_localization.tool import register_mock_localization_tools
@@ -25,6 +26,7 @@ register_path_tracking_tools(mcp, tracking_manager)
 register_hybrid_astar_planner_tool(mcp)
 register_openarm_reach_tools(mcp)
 register_sam3_segmentation_tools(mcp, sam3_manager)
+register_gazebo_realsense_camera_tool(mcp)
 
 
 if __name__ == "__main__":

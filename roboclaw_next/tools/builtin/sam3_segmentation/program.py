@@ -17,7 +17,7 @@ from pydantic import ValidationError
 
 from robot_runtime.perception.sam3.errors import Sam3ErrorCode, Sam3RuntimeError
 
-from .models import Sam3CurrentViewResult
+from .models import CameraCalibrationInput, Sam3CurrentViewResult
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
@@ -118,6 +118,8 @@ class Sam3OneShotProcessManager:
         frame_count: int = 3,
         confidence_threshold: float = 0.5,
         image_topic: str = DEFAULT_IMAGE_TOPIC,
+        depth_image_topic: str | None = None,
+        camera_calibration: CameraCalibrationInput | None = None,
         frame_timeout_sec: float = 10.0,
     ) -> Sam3CurrentViewResult:
         """Run one ROS node job, read the aggregate JSON, then let it exit."""
@@ -127,6 +129,7 @@ class Sam3OneShotProcessManager:
             frame_count=frame_count,
             confidence_threshold=confidence_threshold,
             image_topic=image_topic,
+            depth_image_topic=depth_image_topic,
             frame_timeout_sec=frame_timeout_sec,
         )
         async with self._lock:
@@ -150,6 +153,13 @@ class Sam3OneShotProcessManager:
                 "--result-json",
                 str(result_json_path),
             )
+            if depth_image_topic is not None:
+                command += ("--depth-image-topic", depth_image_topic.strip())
+            if camera_calibration is not None:
+                command += (
+                    "--camera-calibration-json",
+                    camera_calibration.model_dump_json(),
+                )
 
             try:
                 self._state = Sam3JobState.RUNNING
@@ -319,6 +329,7 @@ def _validate_request(
     frame_count: int,
     confidence_threshold: float,
     image_topic: str,
+    depth_image_topic: str | None,
     frame_timeout_sec: float,
 ) -> None:
     if not text_prompt.strip():
@@ -341,6 +352,13 @@ def _validate_request(
         raise Sam3RuntimeError(
             Sam3ErrorCode.INVALID_INPUT,
             "image_topic must be an absolute ROS topic name.",
+        )
+    if depth_image_topic is not None and (
+        not depth_image_topic.strip() or not depth_image_topic.startswith("/")
+    ):
+        raise Sam3RuntimeError(
+            Sam3ErrorCode.INVALID_INPUT,
+            "depth_image_topic must be an absolute ROS topic name.",
         )
     if not math.isfinite(frame_timeout_sec) or frame_timeout_sec <= 0.0:
         raise Sam3RuntimeError(

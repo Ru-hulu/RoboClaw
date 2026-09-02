@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from robot_runtime.perception.sam3.errors import Sam3RuntimeError
 
-from .models import Sam3CurrentViewResult
+from .models import CameraCalibrationInput, Sam3CurrentViewResult
 from .program import (
     DEFAULT_IMAGE_TOPIC,
     Sam3JobState,
@@ -58,7 +58,10 @@ def register_sam3_segmentation_tools(
             "camera view. This starts one short-lived ROS node, loads SAM3 for this "
             "request, subscribes to a sensor_msgs/msg/Image topic, processes the "
             "requested number of frames, writes an aggregate JSON result, returns "
-            "mask/box/overlay artifact paths, and exits to release GPU memory. Use "
+            "mask/box/overlay artifact paths, and exits to release GPU memory. Depth "
+            "and camera calibration inputs are accepted for the future 3D target pose "
+            "pipeline; the current target object pose output is always invalid with "
+            "an identity matrix. Use "
             "this for low-frequency task-level perception, not continuous video "
             "tracking."
         ),
@@ -103,6 +106,26 @@ def register_sam3_segmentation_tools(
                 description="ROS sensor_msgs/msg/Image topic to sample.",
             ),
         ] = DEFAULT_IMAGE_TOPIC,
+        depth_image_topic: Annotated[
+            str | None,
+            Field(
+                min_length=1,
+                max_length=256,
+                description=(
+                    "Optional ROS depth image topic reserved for future 3D target pose "
+                    "estimation."
+                ),
+            ),
+        ] = None,
+        camera_calibration: Annotated[
+            CameraCalibrationInput | None,
+            Field(
+                description=(
+                    "Optional camera intrinsic/extrinsic matrices reserved for future "
+                    "3D target pose estimation."
+                ),
+            ),
+        ] = None,
         frame_timeout_sec: Annotated[
             float,
             Field(
@@ -119,6 +142,8 @@ def register_sam3_segmentation_tools(
                 frame_count=frame_count,
                 confidence_threshold=confidence_threshold,
                 image_topic=image_topic,
+                depth_image_topic=depth_image_topic,
+                camera_calibration=camera_calibration,
                 frame_timeout_sec=frame_timeout_sec,
             )
         except Sam3RuntimeError as error:
