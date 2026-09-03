@@ -12,8 +12,12 @@ Tools after the RPC interface is defined.
 The lifecycle manager starts `service.py`. The service starts one isolated
 JSON-Lines worker, waits for the model-ready handshake, reports readiness to the
 manager, and remains alive while the worker is healthy. `worker_client.py` owns
-the worker subprocess and its stdin/stdout protocol. No camera transport or
-inference RPC is implemented in the service yet.
+the worker subprocess and its stdin/stdout protocol. The service also subscribes
+to the existing LCM RGB-D channels, but discards image messages while no capture
+request is active. `worker_client.infer_frame()` can send a captured color frame
+to the worker as Base64 inside the existing JSON-Lines protocol; the worker
+decodes it in memory without creating a temporary input image. The inference RPC
+is not implemented yet, so the service does not call this method yet.
 
 The external SAM3 checkout must use:
 
@@ -81,10 +85,8 @@ Set these variables in the process that launches `roboclaw_next.tools.mcp_server
 | `ROBOCLAW_SAM3_CHECKPOINT` | required | External `sam3.pt` checkpoint |
 | `ROBOCLAW_SAM3_CHECKPOINT_SHA256` | confirmed digest | Digest recorded in results |
 | `ROBOCLAW_SAM3_DEVICE` | `cuda` | `cuda` or `cpu` |
-| `ROBOCLAW_SAM3_INPUT_ROOTS` | repository root | Allowed local input roots separated by the platform path separator |
 | `ROBOCLAW_SAM3_OUTPUT_ROOT` | `runtime_data/sam3` | Result directory root |
-| `ROBOCLAW_SAM3_REQUEST_TIMEOUT_SEC` | `120` | Model-start and inference timeout |
-| `ROBOCLAW_SAM3_SERVICE_PYTHON` | MCP process Python | Python executable used to start the SAM3 service process |
+| `ROBOCLAW_SAM3_SERVICE_PYTHON` | MCP process Python | Python executable with `lcm` used to start the SAM3 service process |
 
 Example with deployment-neutral paths:
 
@@ -92,9 +94,7 @@ Example with deployment-neutral paths:
 export ROBOCLAW_SAM3_PYTHON=/opt/conda/envs/sam3/bin/python
 export ROBOCLAW_SAM3_SOURCE=/opt/sam3
 export ROBOCLAW_SAM3_CHECKPOINT=/models/sam3.pt
-export ROBOCLAW_SAM3_INPUT_ROOTS=/data/robot_images
 export ROBOCLAW_SAM3_OUTPUT_ROOT=/var/lib/roboclaw/sam3-results
-export ROBOCLAW_SAM3_REQUEST_TIMEOUT_SEC=120
 export ROBOCLAW_SAM3_SERVICE_PYTHON=/opt/roboclaw-agent-venv/bin/python
 ```
 
@@ -114,15 +114,6 @@ status; it does not prevent the MCP server or unrelated robot tools from
 starting.
 
 ## CLI
-
-Run one inference without MCP:
-
-```bash
-python -m robot_runtime.perception.sam3 infer \
-  --image /data/robot_images/frame.png \
-  --prompt "red cup" \
-  --confidence 0.5
-```
 
 Run the JSON Lines worker manually:
 
@@ -169,7 +160,7 @@ Artifacts are written to a hidden temporary sibling directory and renamed only a
 
 | Code | Meaning |
 | --- | --- |
-| `INVALID_INPUT` | Invalid request, path, image, prompt, threshold, or model output shape |
+| `INVALID_INPUT` | Invalid request, image frame, prompt, threshold, or model output shape |
 | `MODEL_UNAVAILABLE` | Missing environment, import, source, checkpoint, or CUDA capability |
 | `SOURCE_REVISION_MISMATCH` | External checkout differs from the pinned revision or is dirty |
 | `CHECKPOINT_MISMATCH` | Checkpoint size or measured SHA-256 is wrong |

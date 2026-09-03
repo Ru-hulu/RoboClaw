@@ -12,10 +12,9 @@ from .errors import Sam3ErrorCode, Sam3RuntimeError
 
 @dataclass(frozen=True)
 class Sam3Request:
-    """One validated local-image segmentation request."""
+    """One validated in-memory image segmentation request."""
 
     request_id: str
-    image_path: str
     text_prompt: str
     confidence_threshold: float = 0.5
 
@@ -30,10 +29,6 @@ class Sam3Request:
             request_id = str(UUID(request_id_value))
         except (ValueError, AttributeError) as error:
             raise _invalid("request_id must be a valid UUID string.") from error
-
-        image_path_value = payload.get("image_path")
-        if not isinstance(image_path_value, str) or not image_path_value.strip():
-            raise _invalid("image_path must be a non-empty string.")
 
         prompt_value = payload.get("text_prompt")
         if not isinstance(prompt_value, str):
@@ -55,7 +50,6 @@ class Sam3Request:
 
         return cls(
             request_id=request_id,
-            image_path=image_path_value.strip(),
             text_prompt=prompt,
             confidence_threshold=threshold,
         )
@@ -63,7 +57,6 @@ class Sam3Request:
     def to_dict(self) -> dict[str, object]:
         return {
             "request_id": self.request_id,
-            "image_path": self.image_path,
             "text_prompt": self.text_prompt,
             "confidence_threshold": self.confidence_threshold,
         }
@@ -94,7 +87,6 @@ class Sam3Result:
     """Complete metadata for one atomic SAM3 result directory."""
 
     request_id: str
-    image_path: str
     input_sha256: str
     text_prompt: str
     image_width: int
@@ -117,7 +109,6 @@ class Sam3Result:
         return {
             "schema_version": self.schema_version,
             "request_id": self.request_id,
-            "image_path": self.image_path,
             "input_sha256": self.input_sha256,
             "text_prompt": self.text_prompt,
             "image_width": self.image_width,

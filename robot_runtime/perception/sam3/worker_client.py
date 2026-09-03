@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import select
@@ -9,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import TextIO
+
+from robot_runtime.perception.lcm_protocol import DECODE_OK, DecodeImageResult
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -37,7 +40,8 @@ class Sam3WorkerClient:
         ).strip()
         if not worker_python:
             raise RuntimeError("ROBOCLAW_SAM3_PYTHON cannot be blank.")
-
+        # /Users/hongru/paper_project/RoboClaw/robot_runtime/perception/sam3/__main__.py
+        # 实际上对应的就是sam3的worker
         self._process = subprocess.Popen(
             (
                 worker_python,
@@ -61,23 +65,45 @@ class Sam3WorkerClient:
             self.close()
             raise
 
-    def infer(
+    def infer_frame(
         self,
         request_id: str,
-        image_path: Path,
+        frame: DecodeImageResult,
         prompt: str,
         confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
+    ) -> dict[str, object]:
+        """Send one decoded in-memory LCM color frame to the worker."""
+
+        if (
+            frame.state != DECODE_OK
+            or frame.header is None
+            or frame.image_bytes is None
+        ):
+            raise ValueError("SAM3 requires one valid decoded color frame.")
+
+        request = {
+            "request_id": request_id,
+            "image_frame": {
+                "width": frame.header["width"],
+                "height": frame.header["height"],
+                "step": frame.header["step"],
+                "encoding": frame.header["encoding"],
+                "data_base64": base64.b64encode(frame.image_bytes).decode("ascii"),
+            },
+            "text_prompt": prompt,
+            "confidence_threshold": confidence_threshold,
+        }
+        return self._send_request(request_id, request)
+
+    def _send_request(
+        self,
+        request_id: str,
+        request: dict[str, object],
     ) -> dict[str, object]:
         process = self._process
         if process is None or process.stdin is None or process.stdout is None:
             raise RuntimeError("SAM3 worker is not connected.")
 
-        request = {
-            "request_id": request_id,
-            "image_path": str(image_path),
-            "text_prompt": prompt,
-            "confidence_threshold": confidence_threshold,
-        }
         process.stdin.write(json.dumps(request, separators=(",", ":")) + "\n")
         process.stdin.flush()
         response = _read_worker_message(process.stdout)

@@ -1,8 +1,7 @@
-"""Image validation, output normalization, and atomic SAM3 artifacts."""
+"""In-memory image inference, output normalization, and SAM3 artifacts."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import shutil
@@ -12,16 +11,13 @@ from typing import Protocol
 from uuid import uuid4
 
 import numpy as np
-from PIL import Image, ImageDraw, UnidentifiedImageError
+from PIL import Image, ImageDraw
 
 from .config import Sam3RuntimeConfig
 from .errors import Sam3ErrorCode, Sam3RuntimeError
 from .models import Sam3Instance, Sam3Request, Sam3Result
 
 
-SUPPORTED_IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp"})
-MAX_IMAGE_FILE_BYTES = 50 * 1024 * 1024
-MAX_IMAGE_PIXELS = 40_000_000
 _OVERLAY_COLORS = (
     (255, 99, 71),
     (0, 191, 255),
@@ -81,11 +77,29 @@ class Sam3Engine:
             self._load_duration_ms = duration
         return self._load_duration_ms
 
-    def infer(self, request: Sam3Request) -> Sam3Result:
-        """Run one inference and atomically write its artifacts."""
+    def infer_frame(
+        self,
+        request: Sam3Request,
+        image: Image.Image,
+        input_sha256: str,
+    ) -> Sam3Result:
+        """Run one inference from an image already decoded in the worker."""
 
         load_duration_ms = self.load()
-        image_path, image, input_sha256 = self._load_image(request.image_path)
+        return self._infer_image(
+            request,
+            image,
+            input_sha256,
+            load_duration_ms,
+        )
+
+    def _infer_image(
+        self,
+        request: Sam3Request,
+        image: Image.Image,
+        input_sha256: str,
+        load_duration_ms: float,
+    ) -> Sam3Result:
         raw_output, inference_duration_ms = self._backend.infer(
             image,
             request.text_prompt,
@@ -104,7 +118,6 @@ class Sam3Engine:
         )
         return self._write_artifacts(
             request=request,
-            image_path=image_path,
             image=image,
             input_sha256=input_sha256,
             masks=masks,
@@ -113,48 +126,6 @@ class Sam3Engine:
             load_duration_ms=load_duration_ms,
             inference_duration_ms=float(inference_duration_ms),
         )
-
-    def _load_image(self, requested_path: str) -> tuple[Path, Image.Image, str]:
-        try:
-            path = Path(requested_path).expanduser().resolve(strict=True)
-        except (OSError, RuntimeError) as error:
-            raise _invalid_input(f"Image does not exist: {requested_path}") from error
-        if not path.is_file():
-            raise _invalid_input(f"Image is not a regular file: {path}")
-        if not any(
-            path.is_relative_to(root.resolve()) for root in self._config.input_roots
-        ):
-            raise _invalid_input(
-                f"Image is outside the configured allowed input roots: {path}"
-            )
-        if path.suffix.lower() not in SUPPORTED_IMAGE_SUFFIXES:
-            raise _invalid_input(
-                "Image must use a supported image extension: .jpg, .jpeg, .png, or .webp."
-            )
-        try:
-            size = path.stat().st_size
-        except OSError as error:
-            raise _invalid_input(f"Cannot read image metadata: {path}") from error
-        if size > MAX_IMAGE_FILE_BYTES:
-            raise _invalid_input("Image file exceeds the 50 MiB limit.")
-
-        try:
-            with Image.open(path) as candidate:
-                width, height = candidate.size
-                if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
-                    raise _invalid_input(
-                        "Decoded image exceeds the 40 million pixel limit."
-                    )
-                candidate.verify()
-            with Image.open(path) as candidate:
-                image = candidate.convert("RGB")
-                image.load()
-        except Sam3RuntimeError:
-            raise
-        except (OSError, ValueError, UnidentifiedImageError) as error:
-            raise _invalid_input(f"Image could not be decoded: {path}") from error
-
-        return path, image, _sha256_file(path)
 
     def _normalize_output(
         self,
@@ -200,7 +171,6 @@ class Sam3Engine:
         self,
         *,
         request: Sam3Request,
-        image_path: Path,
         image: Image.Image,
         input_sha256: str,
         masks: np.ndarray,
@@ -251,7 +221,6 @@ class Sam3Engine:
             overlay.save(temporary_directory / "overlay.png", format="PNG")
             result = Sam3Result(
                 request_id=request.request_id,
-                image_path=str(image_path),
                 input_sha256=input_sha256,
                 text_prompt=request.text_prompt,
                 image_width=image.width,
@@ -302,14 +271,6 @@ def _render_overlay(
             width=2,
         )
     return overlay
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _remove_temporary_directory(path: Path) -> None:

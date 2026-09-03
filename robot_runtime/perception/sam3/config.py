@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import math
 import os
-import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,10 +24,7 @@ class Sam3RuntimeConfig:
     source_path: Path
     checkpoint_path: Path
     output_root: Path
-    input_roots: tuple[Path, ...]
-    python_executable: str
     device: str = "cuda"
-    request_timeout_sec: float = 120.0
     source_revision: str = PINNED_SOURCE_REVISION
     checkpoint_sha256: str = EXPECTED_CHECKPOINT_SHA256
 
@@ -66,20 +61,6 @@ class Sam3RuntimeConfig:
                 f"SAM3 checkpoint does not exist: {checkpoint_path}"
             )
 
-        roots_value = values.get("ROBOCLAW_SAM3_INPUT_ROOTS", "").strip()
-        if roots_value:
-            input_roots = tuple(
-                _resolve_path(item, root)
-                for item in roots_value.split(os.pathsep)
-                if item.strip()
-            )
-            if not input_roots:
-                raise _configuration_error(
-                    "ROBOCLAW_SAM3_INPUT_ROOTS contains no usable paths."
-                )
-        else:
-            input_roots = (root,)
-
         output_value = values.get("ROBOCLAW_SAM3_OUTPUT_ROOT", "").strip()
         output_root = _resolve_path(
             output_value or str(root / "runtime_data" / "sam3"),
@@ -89,16 +70,6 @@ class Sam3RuntimeConfig:
         device = values.get("ROBOCLAW_SAM3_DEVICE", "cuda").strip().lower()
         if device not in {"cuda", "cpu"}:
             raise _configuration_error("ROBOCLAW_SAM3_DEVICE must be cuda or cpu.")
-
-        request_timeout = _positive_float(
-            values.get("ROBOCLAW_SAM3_REQUEST_TIMEOUT_SEC", "120"),
-            "ROBOCLAW_SAM3_REQUEST_TIMEOUT_SEC",
-        )
-        python_executable = values.get(
-            "ROBOCLAW_SAM3_PYTHON", sys.executable
-        ).strip()
-        if not python_executable:
-            raise _configuration_error("ROBOCLAW_SAM3_PYTHON cannot be blank.")
 
         checkpoint_sha256 = values.get(
             "ROBOCLAW_SAM3_CHECKPOINT_SHA256",
@@ -115,10 +86,7 @@ class Sam3RuntimeConfig:
             source_path=source_path,
             checkpoint_path=checkpoint_path,
             output_root=output_root,
-            input_roots=input_roots,
-            python_executable=python_executable,
             device=device,
-            request_timeout_sec=request_timeout,
             checkpoint_sha256=checkpoint_sha256,
         )
 
@@ -128,18 +96,6 @@ def _resolve_path(value: str, repository_root: Path) -> Path:
     if not path.is_absolute():
         path = repository_root / path
     return path.resolve()
-
-
-def _positive_float(value: str, variable: str) -> float:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError) as error:
-        raise _configuration_error(f"{variable} must be a finite number.") from error
-    if not math.isfinite(parsed):
-        raise _configuration_error(f"{variable} must be a finite number.")
-    if parsed <= 0:
-        raise _configuration_error(f"{variable} must be greater than zero.")
-    return parsed
 
 
 def _configuration_error(message: str) -> Sam3RuntimeError:

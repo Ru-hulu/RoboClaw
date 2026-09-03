@@ -18,27 +18,31 @@ Service ⇄ Worker
 from __future__ import annotations
 
 import json
-import time
 
+from .lcm_rgbd_receiver import LcmRgbdReceiver
 from .worker_client import Sam3WorkerClient
 
 
-WORKER_POLL_INTERVAL_SEC = 0.25
+LCM_POLL_TIMEOUT_MS = 100
 
 
 def main() -> int:
     worker = Sam3WorkerClient()
     try:
         worker.start()
+        receiver = LcmRgbdReceiver()
         _emit_stdout(
             {
                 "ok": True,
-                "message": "SAM3 model is loaded and the service is ready.",
+                "message": (
+                    "SAM3 model is loaded and the service is listening for "
+                    "LCM RGB-D images."
+                ),
                 "worker_pid": worker.pid,
             }
         )
         while worker.is_running:
-            time.sleep(WORKER_POLL_INTERVAL_SEC)
+            receiver.poll(LCM_POLL_TIMEOUT_MS)
         return 1
     except KeyboardInterrupt:
         return 0
