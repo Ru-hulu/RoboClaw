@@ -4,11 +4,14 @@ This directory contains RoboClaw's inference adapter for text-prompted SAM3 imag
 
 ## Runtime model
 
-The FastMCP server stays lightweight. `start_sam3_perception` starts an LCM
-service, and that service starts one isolated SAM3 worker and waits for the model
-to finish loading. While idle, the service discards incoming RGB-D images. A
-`get_target_object_pose` request makes it collect the next RGB and depth pair,
-run SAM3 on the RGB frame, and return the result directly over LCM.
+The FastMCP server exposes only lifecycle controls for the SAM3 service:
+`start_sam3_perception`, `get_sam3_perception_status`, and
+`stop_sam3_perception`. Inference RPC clients will belong to separate business
+Tools after the RPC interface is defined.
+
+The current runtime service still contains the temporary LCM target-pose path.
+That transport is intentionally outside the lifecycle manager and will be
+reworked separately.
 
 Depth-to-3D projection is not implemented yet. A successful segmentation
 therefore returns `pose_valid=false`; the received depth frame is retained only
@@ -148,13 +151,9 @@ stops the worker and returns `WORKER_EXITED` instead of leaking a pipe error.
 - `start_sam3_perception()` starts the long-running SAM3 perception service.
 - `get_sam3_perception_status()` reads the managed service process state.
 - `stop_sam3_perception()` stops the managed service process.
-- `get_target_object_pose(prompt)` sends one LCM target-pose RPC to the running
-  service and returns whether the target position is valid, its coordinate
-  frame, center position, and confidence score.
 
-`get_target_object_pose` depends on the Gazebo/RealSense LCM bridge and the SAM3
-perception service already running. Its public input is intentionally just the
-target prompt. The MCP layer uses one fixed LCM request/response protocol.
+These Tools do not accept prompts or perform inference. Future business Tools
+will call the SAM3 service through a separately defined RPC client.
 
 ## Result files
 

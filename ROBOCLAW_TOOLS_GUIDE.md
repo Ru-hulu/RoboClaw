@@ -2,11 +2,10 @@
 
 本文档以当前仓库实现为准，详细介绍 RoboClaw 工具从定义、注册到被 LLM 调用的完整链路，以及模拟定位、Hybrid A*、MPC 路径跟踪、OpenArm 和 SAM3 的使用方法。
 
-> SAM3 说明：当前 MCP Tool 层已调整为“常驻 SAM3 perception service
-> + LCM target-pose RPC”。新的 MCP 工具是 `start_sam3_perception`、
-> `get_sam3_perception_status`、`stop_sam3_perception` 和
-> `get_target_object_pose`。第 9 章中关于旧 lazy worker / one-shot
-> 分割的细节属于历史设计材料，当前请以
+> SAM3 说明：当前 MCP Tool 层只注册 `start_sam3_perception`、
+> `get_sam3_perception_status` 和 `stop_sam3_perception` 三个进程生命周期
+> Tool。推理 RPC 将由后续独立业务 Tool 调用，不属于生命周期 manager。
+> 第 9 章中关于旧 lazy worker / one-shot 分割的细节属于历史设计材料，请以
 > `robot_runtime/perception/sam3/README.md` 和代码为准。
 
 阅读本文后，应该能够回答以下问题：
@@ -200,8 +199,7 @@ roboclaw_tools__start_mock_localization
 | OpenArm | `get_openarm_ee_pose` | 进程内 FK | 末端位姿 |
 | OpenArm | `plan_openarm_reach` | 进程内 IK | 关节轨迹和最终误差 |
 | SAM3 | `start_sam3_perception` | 启动常驻感知服务 | state、PID、退出码 |
-| SAM3 | `get_sam3_perception_status` | 查询 manager | state、PID、当前请求 |
-| SAM3 | `get_target_object_pose` | LCM RPC | 目标位置、坐标系、是否有效 |
+| SAM3 | `get_sam3_perception_status` | 查询 manager | state、PID、退出码 |
 | SAM3 | `stop_sam3_perception` | 停止常驻感知服务 | stopped 状态 |
 
 当前工具包含四种典型模式：
@@ -566,8 +564,8 @@ GPU 模型 + 本地结果文件
 
 | 层 | 路径 | 职责 |
 | --- | --- | --- |
-| MCP Tool 契约 | `roboclaw_next/tools/builtin/sam3_segmentation/tool.py` | 定义工具名、输入、返回值和错误结构 |
-| 常驻感知服务 manager | `roboclaw_next/tools/builtin/sam3_segmentation/program.py` | 启动、状态查询、停止和 target-pose RPC |
+| MCP Tool 契约 | `roboclaw_next/tools/builtin/sam3_segmentation/tool.py` | 定义三个生命周期 Tool |
+| 常驻感知服务 manager | `roboclaw_next/tools/builtin/sam3_segmentation/program.py` | 启动、状态查询和停止进程 |
 | SAM3 推理适配 | `robot_runtime/perception/sam3/` | 输入校验、官方模型调用和结果落盘 |
 
 官方 SAM3 源码、训练代码和权重不进入 RoboClaw Git。仓库只保存推理适配层，外部 checkout 与 checkpoint 通过环境变量接入。
@@ -577,13 +575,11 @@ GPU 模型 + 本地结果文件
 | Tool | 输入 | 是否加载模型 | 用途 |
 | --- | --- | --- | --- |
 | `start_sam3_perception` | 无 | 是；由常驻服务加载 | 启动 SAM3 perception service |
-| `get_sam3_perception_status` | 无 | 否 | 查看状态、PID 和当前请求 |
-| `get_target_object_pose` | 目标物体 prompt | 否；要求服务已启动 | 通过 LCM RPC 请求目标物体三维中心位置 |
+| `get_sam3_perception_status` | 无 | 否 | 查看进程状态、PID 和退出码 |
 | `stop_sam3_perception` | 无 | 否；只会停止 | 停止 SAM3 perception service |
 
-这几个 Tool 共用同一个 `Sam3PerceptionManager`。在同一个 MCP Server
-进程内，它们看到的是同一个常驻服务状态。`get_target_object_pose` 默认
-只暴露 `prompt`；LCM 通道和 RPC 超时由工具层固定，避免调用时出现多套协议。
+这三个 Tool 共用同一个 `Sam3PerceptionManager`，只管理同一个常驻服务
+进程，不接收 Prompt，也不执行推理 RPC。
 
 #### `get_sam3_status` 的特点
 

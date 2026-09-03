@@ -32,10 +32,8 @@ Current built-in capabilities:
   `ROBOCLAW_REALSENSE_COLOR_IMAGE` and `ROBOCLAW_REALSENSE_DEPTH_IMAGE`.
 - `sam3_segmentation/`: SAM3 perception service lifecycle Tools
   (`start_sam3_perception`, `get_sam3_perception_status`,
-  `stop_sam3_perception`) and the target-pose RPC Tool
-  (`get_target_object_pose`). The perception service listens to the RealSense
-  LCM image channels and should process frames only when a target-pose RPC is
-  active.
+  `stop_sam3_perception`). SAM3 inference RPC clients belong to separate
+  business Tools and are not part of this lifecycle manager.
 
 ## MCP Tool-Call Chain
 
