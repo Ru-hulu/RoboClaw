@@ -30,7 +30,12 @@ Current built-in capabilities:
   `start_gazebo_realsense_camera`, `get_gazebo_realsense_camera_status`, and
   `stop_gazebo_realsense_camera`. The listener relays images to LCM channels
   `ROBOCLAW_REALSENSE_COLOR_IMAGE` and `ROBOCLAW_REALSENSE_DEPTH_IMAGE`.
-- `sam3_segmentation/`: one-shot SAM3 current-view segmentation Tools.
+- `sam3_segmentation/`: SAM3 perception service lifecycle Tools
+  (`start_sam3_perception`, `get_sam3_perception_status`,
+  `stop_sam3_perception`) and the target-pose RPC Tool
+  (`get_target_object_pose`). The perception service listens to the RealSense
+  LCM image channels and should process frames only when a target-pose RPC is
+  active.
 
 ## MCP Tool-Call Chain
 

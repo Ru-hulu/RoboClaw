@@ -2,11 +2,12 @@
 
 本文档以当前仓库实现为准，详细介绍 RoboClaw 工具从定义、注册到被 LLM 调用的完整链路，以及模拟定位、Hybrid A*、MPC 路径跟踪、OpenArm 和 SAM3 的使用方法。
 
-> SAM3 说明：当前代码已从“单张图片输入 + 懒加载常驻 worker”
-> 调整为“当前 ROS 相机视角 + one-shot 分割任务”。新的 MCP 工具是
-> `segment_current_view_with_sam3`、`get_sam3_status` 和
-> `cancel_sam3_segmentation`。第 9 章的旧 worker 细节仍需后续整理，
-> 当前请以 `robot_runtime/perception/sam3/README.md` 和代码为准。
+> SAM3 说明：当前 MCP Tool 层已调整为“常驻 SAM3 perception service
+> + LCM target-pose RPC”。新的 MCP 工具是 `start_sam3_perception`、
+> `get_sam3_perception_status`、`stop_sam3_perception` 和
+> `get_target_object_pose`。第 9 章中关于旧 lazy worker / one-shot
+> 分割的细节属于历史设计材料，当前请以
+> `robot_runtime/perception/sam3/README.md` 和代码为准。
 
 阅读本文后，应该能够回答以下问题：
 
@@ -198,9 +199,10 @@ roboclaw_tools__start_mock_localization
 | 路径跟踪 | `stop_path_tracking` | 停止 MPC 进程 | stopped 状态 |
 | OpenArm | `get_openarm_ee_pose` | 进程内 FK | 末端位姿 |
 | OpenArm | `plan_openarm_reach` | 进程内 IK | 关节轨迹和最终误差 |
-| SAM3 | `segment_image_with_sam3` | 懒加载 GPU worker | masks、boxes、scores、文件路径 |
-| SAM3 | `get_sam3_status` | 查询 manager | stopped/starting/ready/busy |
-| SAM3 | `unload_sam3` | 终止 worker | 释放模型显存 |
+| SAM3 | `start_sam3_perception` | 启动常驻感知服务 | state、PID、退出码 |
+| SAM3 | `get_sam3_perception_status` | 查询 manager | state、PID、当前请求 |
+| SAM3 | `get_target_object_pose` | LCM RPC | 目标位置、坐标系、是否有效 |
+| SAM3 | `stop_sam3_perception` | 停止常驻感知服务 | stopped 状态 |
 
 当前工具包含四种典型模式：
 
@@ -209,7 +211,7 @@ roboclaw_tools__start_mock_localization
 | 纯函数 | OpenArm FK/IK | 计算快、无外部进程、无长期资源 |
 | 单次子进程 | Hybrid A* | 每次任务独立，运行后自然退出 |
 | 受管理常驻进程 | 定位、MPC | ROS 节点需要持续发布、订阅或控制 |
-| 懒加载 worker | SAM3 | 模型加载昂贵，GPU 需要复用和回收 |
+| 受管理常驻感知服务 | SAM3 | 模型加载昂贵，进程和 GPU 状态需要复用 |
 
 ## 4. 模拟定位
 
@@ -565,20 +567,23 @@ GPU 模型 + 本地结果文件
 | 层 | 路径 | 职责 |
 | --- | --- | --- |
 | MCP Tool 契约 | `roboclaw_next/tools/builtin/sam3_segmentation/tool.py` | 定义工具名、输入、返回值和错误结构 |
-| worker 生命周期 | `roboclaw_next/tools/builtin/sam3_segmentation/program.py` | 启动、复用、状态、超时、取消和卸载 |
+| 常驻感知服务 manager | `roboclaw_next/tools/builtin/sam3_segmentation/program.py` | 启动、状态查询、停止和 target-pose RPC |
 | SAM3 推理适配 | `robot_runtime/perception/sam3/` | 输入校验、官方模型调用和结果落盘 |
 
 官方 SAM3 源码、训练代码和权重不进入 RoboClaw Git。仓库只保存推理适配层，外部 checkout 与 checkpoint 通过环境变量接入。
 
-### 9.2 三个 SAM3 Tool
+### 9.2 当前 SAM3 Tool
 
 | Tool | 输入 | 是否加载模型 | 用途 |
 | --- | --- | --- | --- |
-| `segment_image_with_sam3` | 图片路径、文本提示、置信度阈值 | 必要时加载 | 对单张本地图片执行文本引导分割 |
-| `get_sam3_status` | 无 | 否 | 查看状态、PID、当前请求、加载耗时和空闲期限 |
-| `unload_sam3` | 无 | 否；只会停止 | 立即终止 worker 并释放 SAM3 显存 |
+| `start_sam3_perception` | 无 | 是；由常驻服务加载 | 启动 SAM3 perception service |
+| `get_sam3_perception_status` | 无 | 否 | 查看状态、PID 和当前请求 |
+| `get_target_object_pose` | 目标物体 prompt | 否；要求服务已启动 | 通过 LCM RPC 请求目标物体三维中心位置 |
+| `stop_sam3_perception` | 无 | 否；只会停止 | 停止 SAM3 perception service |
 
-三个 Tool 共用同一个 `Sam3WorkerProcessManager`。在同一个 MCP Server 进程内，它们看到的是同一个 worker 状态。
+这几个 Tool 共用同一个 `Sam3PerceptionManager`。在同一个 MCP Server
+进程内，它们看到的是同一个常驻服务状态。`get_target_object_pose` 默认
+只暴露 `prompt`；LCM 通道和 RPC 超时由工具层固定，避免调用时出现多套协议。
 
 #### `get_sam3_status` 的特点
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 from pathlib import Path
 
 from robot_runtime.control.differential_drive_mpc.reference_path import (
@@ -27,7 +27,7 @@ DEFAULT_PLAN_OUTPUT_PATH = (
 )
 
 
-class TrackingState(StrEnum):
+class TrackingState(str, Enum):
     """Lifecycle states reported by the path tracking process."""
 
     IDLE = "idle"

@@ -1,165 +1,57 @@
-"""FastMCP contracts for one-shot SAM3 current-view segmentation."""
+"""FastMCP contracts for the SAM3 perception service."""
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel, Field
+from pydantic import Field
 
-from robot_runtime.perception.sam3.errors import Sam3RuntimeError
-
-from .models import CameraCalibrationInput, Sam3CurrentViewResult
-from .program import (
-    DEFAULT_IMAGE_TOPIC,
-    Sam3JobState,
-    Sam3JobStatus,
-    Sam3OneShotProcessManager,
+from .models import (
+    Sam3PerceptionStatusResult,
+    Sam3TargetObjectPoseErrorResult,
+    Sam3TargetObjectPoseResult,
 )
-
-
-class Sam3ToolErrorResult(BaseModel):
-    """Stable failure result that does not terminate the MCP transport."""
-
-    ok: Literal[False] = False
-    error_code: str = Field(description="Stable SAM3 runtime error code.")
-    message: str = Field(description="Concise recovery-oriented error message.")
-    result_json_path: str | None = Field(
-        default=None,
-        description="Aggregate JSON path when the ROS node wrote a failure result.",
-    )
-
-
-class Sam3StatusResult(BaseModel):
-    """Current or most recent one-shot segmentation job state."""
-
-    state: Sam3JobState
-    pid: int | None
-    return_code: int | None
-    current_request_id: str | None
-    last_result_json_path: str | None
-    message: str
+from .program import Sam3PerceptionManager
 
 
 def register_sam3_segmentation_tools(
     mcp: FastMCP,
-    process_manager: Sam3OneShotProcessManager,
+    process_manager: Sam3PerceptionManager,
 ) -> None:
-    """Register current-view segmentation, status, and cancel tools."""
+    """Register SAM3 perception lifecycle and target-pose RPC tools."""
 
     manager = process_manager
 
     @mcp.tool(
-        name="segment_current_view_with_sam3",
-        title="Segment Current View with SAM3",
+        name="start_sam3_perception",
+        title="Start SAM3 Perception",
         description=(
-            "Segment objects matching a text prompt from RoboClaw's current ROS "
-            "camera view. This starts one short-lived ROS node, loads SAM3 for this "
-            "request, subscribes to a sensor_msgs/msg/Image topic, processes the "
-            "requested number of frames, writes an aggregate JSON result, returns "
-            "mask/box/overlay artifact paths, and exits to release GPU memory. Depth "
-            "and camera calibration inputs are accepted for the future 3D target pose "
-            "pipeline; the current target object pose output is always invalid with "
-            "an identity matrix. Use "
-            "this for low-frequency task-level perception, not continuous video "
-            "tracking."
+            "Start RoboClaw's long-running SAM3 perception service. The service "
+            "loads the SAM3 worker once, listens to LCM RGB-D image channels from "
+            "the Gazebo/RealSense bridge, and exposes a target-pose RPC over LCM. "
+            "Its image callbacks should ignore incoming frames unless an active "
+            "target-pose RPC is waiting, so the service does not continuously cache "
+            "latest RGB-D frames. This only starts the service; it does not run a "
+            "target-object query."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,
             destructiveHint=False,
-            idempotentHint=False,
+            idempotentHint=True,
             openWorldHint=False,
         ),
     )
-    async def segment_current_view_with_sam3(
-        text_prompt: Annotated[
-            str,
-            Field(
-                min_length=1,
-                max_length=256,
-                description="Object category or phrase to segment, such as 'red cube'.",
-            ),
-        ],
-        frame_count: Annotated[
-            int,
-            Field(
-                ge=1,
-                le=10,
-                description="Number of camera frames to segment before exiting.",
-            ),
-        ] = 3,
-        confidence_threshold: Annotated[
-            float,
-            Field(
-                ge=0.0,
-                le=1.0,
-                allow_inf_nan=False,
-                description="Minimum SAM3 score retained in each frame result.",
-            ),
-        ] = 0.5,
-        image_topic: Annotated[
-            str,
-            Field(
-                min_length=1,
-                max_length=256,
-                description="ROS sensor_msgs/msg/Image topic to sample.",
-            ),
-        ] = DEFAULT_IMAGE_TOPIC,
-        depth_image_topic: Annotated[
-            str | None,
-            Field(
-                min_length=1,
-                max_length=256,
-                description=(
-                    "Optional ROS depth image topic reserved for future 3D target pose "
-                    "estimation."
-                ),
-            ),
-        ] = None,
-        camera_calibration: Annotated[
-            CameraCalibrationInput | None,
-            Field(
-                description=(
-                    "Optional camera intrinsic/extrinsic matrices reserved for future "
-                    "3D target pose estimation."
-                ),
-            ),
-        ] = None,
-        frame_timeout_sec: Annotated[
-            float,
-            Field(
-                gt=0.0,
-                le=60.0,
-                allow_inf_nan=False,
-                description="Maximum seconds to wait for the requested camera frames.",
-            ),
-        ] = 10.0,
-    ) -> Sam3CurrentViewResult | Sam3ToolErrorResult:
-        try:
-            return await manager.segment_current_view(
-                text_prompt=text_prompt,
-                frame_count=frame_count,
-                confidence_threshold=confidence_threshold,
-                image_topic=image_topic,
-                depth_image_topic=depth_image_topic,
-                camera_calibration=camera_calibration,
-                frame_timeout_sec=frame_timeout_sec,
-            )
-        except Sam3RuntimeError as error:
-            status = await manager.get_status()
-            return Sam3ToolErrorResult(
-                error_code=error.code.value,
-                message=error.message,
-                result_json_path=status.last_result_json_path,
-            )
+    async def start_sam3_perception() -> Sam3PerceptionStatusResult:
+        return await manager.start()
 
     @mcp.tool(
-        name="get_sam3_status",
-        title="Get SAM3 Status",
+        name="get_sam3_perception_status",
+        title="Get SAM3 Perception Status",
         description=(
-            "Read the current or most recent one-shot SAM3 job state. This does not "
-            "start the ROS node or load the SAM3 model."
+            "Read the SAM3 perception service process state. This does not start "
+            "SAM3, load the model, or send a target-pose request."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=True,
@@ -168,33 +60,55 @@ def register_sam3_segmentation_tools(
             openWorldHint=False,
         ),
     )
-    async def get_sam3_status() -> Sam3StatusResult:
-        return _status_result(await manager.get_status())
+    async def get_sam3_perception_status() -> Sam3PerceptionStatusResult:
+        return await manager.get_status()
 
     @mcp.tool(
-        name="cancel_sam3_segmentation",
-        title="Cancel SAM3 Segmentation",
+        name="stop_sam3_perception",
+        title="Stop SAM3 Perception",
         description=(
-            "Terminate the active one-shot SAM3 current-view job if it is still "
-            "running. Repeated calls are safe."
+            "Stop RoboClaw's long-running SAM3 perception service if this MCP "
+            "server started it. Repeated calls are safe."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,
-            destructiveHint=True,
+            destructiveHint=False,
             idempotentHint=True,
             openWorldHint=False,
         ),
     )
-    async def cancel_sam3_segmentation() -> Sam3StatusResult:
-        return _status_result(await manager.cancel())
+    async def stop_sam3_perception() -> Sam3PerceptionStatusResult:
+        return await manager.stop()
 
-
-def _status_result(status: Sam3JobStatus) -> Sam3StatusResult:
-    return Sam3StatusResult(
-        state=status.state,
-        pid=status.pid,
-        return_code=status.return_code,
-        current_request_id=status.current_request_id,
-        last_result_json_path=status.last_result_json_path,
-        message=status.message,
+    @mcp.tool(
+        name="get_target_object_pose",
+        title="Get Target Object Pose",
+        description=(
+            "Request a target object's 3D pose from the running SAM3 perception "
+            "service. Call start_gazebo_realsense_camera first so RGB-D images are "
+            "bridged from ROS to LCM, then call start_sam3_perception so the SAM3 "
+            "service is listening. This tool sends one LCM target-pose RPC using "
+            "the prompt, waits for the matching response, and returns whether the "
+            "pose is valid plus the target center position in the camera frame."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
     )
+    async def get_target_object_pose(
+        prompt: Annotated[
+            str,
+            Field(
+                min_length=1,
+                max_length=256,
+                description=(
+                    "Target object phrase. Use a short English noun phrase when "
+                    "possible, for example 'red cube'."
+                ),
+            ),
+        ],
+    ) -> Sam3TargetObjectPoseResult | Sam3TargetObjectPoseErrorResult:
+        return await manager.get_target_object_pose(prompt)

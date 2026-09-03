@@ -4,13 +4,17 @@ This directory contains RoboClaw's inference adapter for text-prompted SAM3 imag
 
 ## Runtime model
 
-The FastMCP server stays lightweight. `segment_current_view_with_sam3` starts a
-short-lived ROS 2 node for one perception request. That node starts a SAM3 worker,
-waits for the model to load, subscribes to a `sensor_msgs/msg/Image` camera topic,
-segments the requested number of frames, writes an aggregate JSON result, and then
-exits. The SAM3 model is therefore released after each low-frequency perception
-request instead of staying resident while Gazebo or other workloads need GPU
-memory.
+The FastMCP server stays lightweight. `start_sam3_perception` starts an LCM
+service, and that service starts one isolated SAM3 worker and waits for the model
+to finish loading. While idle, the service discards incoming RGB-D images. A
+`get_target_object_pose` request makes it collect the next RGB and depth pair,
+run SAM3 on the RGB frame, and return the result directly over LCM.
+
+Depth-to-3D projection is not implemented yet. A successful segmentation
+therefore returns `pose_valid=false`; the received depth frame is retained only
+for the duration of that request. The RGB frame is written to a temporary PNG
+because the existing worker accepts image paths, then deleted immediately after
+the worker replies.
 
 The external SAM3 checkout must use:
 
@@ -73,7 +77,7 @@ Set these variables in the process that launches `roboclaw_next.tools.mcp_server
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `ROBOCLAW_SAM3_PYTHON` | ROS node Python | Python executable in the isolated SAM3 worker environment |
+| `ROBOCLAW_SAM3_PYTHON` | service process Python | Python executable in the isolated SAM3 worker environment |
 | `ROBOCLAW_SAM3_SOURCE` | required | External pinned SAM3 checkout |
 | `ROBOCLAW_SAM3_CHECKPOINT` | required | External `sam3.pt` checkpoint |
 | `ROBOCLAW_SAM3_CHECKPOINT_SHA256` | confirmed digest | Digest recorded in results |
@@ -81,9 +85,8 @@ Set these variables in the process that launches `roboclaw_next.tools.mcp_server
 | `ROBOCLAW_SAM3_INPUT_ROOTS` | repository root | Allowed local input roots separated by the platform path separator |
 | `ROBOCLAW_SAM3_OUTPUT_ROOT` | `runtime_data/sam3` | Result directory root |
 | `ROBOCLAW_SAM3_REQUEST_TIMEOUT_SEC` | `120` | Model-start and inference timeout |
-| `ROBOCLAW_SAM3_ROS_PYTHON` | MCP process Python | Python executable that can import `rclpy` |
-| `ROBOCLAW_SAM3_CURRENT_VIEW_OUTPUT_ROOT` | `runtime_data/sam3/current_view` | Aggregate current-view result root |
-| `ROBOCLAW_SAM3_JOB_TIMEOUT_SEC` | `180` | Whole one-shot ROS job timeout |
+| `ROBOCLAW_SAM3_SERVICE_PYTHON` | MCP process Python | Python executable with `lcm` and `Pillow` used to start the LCM service |
+| `ROBOCLAW_SAM3_CAPTURE_ROOT` | `runtime_data/sam3/lcm` | Parent directory for request-scoped temporary RGB files |
 
 Example with deployment-neutral paths:
 
@@ -94,9 +97,8 @@ export ROBOCLAW_SAM3_CHECKPOINT=/models/sam3.pt
 export ROBOCLAW_SAM3_INPUT_ROOTS=/data/robot_images
 export ROBOCLAW_SAM3_OUTPUT_ROOT=/var/lib/roboclaw/sam3-results
 export ROBOCLAW_SAM3_REQUEST_TIMEOUT_SEC=120
-export ROBOCLAW_SAM3_ROS_PYTHON=/opt/roboclaw-agent-venv/bin/python
-export ROBOCLAW_SAM3_CURRENT_VIEW_OUTPUT_ROOT=/var/lib/roboclaw/sam3-current-view
-export ROBOCLAW_SAM3_JOB_TIMEOUT_SEC=180
+export ROBOCLAW_SAM3_SERVICE_PYTHON=/opt/roboclaw-agent-venv/bin/python
+export ROBOCLAW_SAM3_CAPTURE_ROOT=/var/lib/roboclaw/sam3-capture
 ```
 
 Verify deployment artifacts before the first inference:
@@ -131,21 +133,10 @@ Run the JSON Lines worker manually:
 python -m robot_runtime.perception.sam3 serve
 ```
 
-Run one current-view ROS camera request without MCP:
+Run the LCM perception service without MCP:
 
 ```bash
-python -m robot_runtime.perception.sam3.ros_node \
-  --request-id "$(python - <<'PY'
-import uuid
-print(uuid.uuid4())
-PY
-)" \
-  --image-topic /head_realsense/color/image_raw \
-  --prompt "red cube" \
-  --confidence 0.5 \
-  --frame-count 3 \
-  --frame-timeout-sec 10 \
-  --result-json runtime_data/sam3/current_view/manual/result.json
+python -m robot_runtime.perception.sam3.lcm_service
 ```
 
 The worker writes protocol JSON only to stdout and operator logs to stderr.
@@ -154,37 +145,32 @@ stops the worker and returns `WORKER_EXITED` instead of leaking a pipe error.
 
 ## FastMCP tools
 
-- `segment_current_view_with_sam3(text_prompt, frame_count=3, confidence_threshold=0.5, image_topic="/head_realsense/color/image_raw")` starts one ROS current-view job and returns the aggregate result read from JSON.
-- `get_sam3_status()` reads the current or most recent one-shot job state without starting the ROS node or loading SAM3.
-- `cancel_sam3_segmentation()` terminates an active one-shot job if it is still running.
+- `start_sam3_perception()` starts the long-running SAM3 perception service.
+- `get_sam3_perception_status()` reads the managed service process state.
+- `stop_sam3_perception()` stops the managed service process.
+- `get_target_object_pose(prompt)` sends one LCM target-pose RPC to the running
+  service and returns whether the target position is valid, its coordinate
+  frame, center position, and confidence score.
 
-`segment_current_view_with_sam3` also accepts optional `depth_image_topic`
-and `camera_calibration` inputs for the future 3D target pose pipeline. The
-current implementation records those inputs but still runs 2D SAM3 segmentation
-only, so `target_object_pose_valid` is always `false` and
-`target_object_pose_matrix` is the 4x4 identity matrix.
-
-Only one current-view job runs at a time. The MCP response contains scores, pixel boxes, metadata, target pose placeholders, and paths; it does not place mask arrays or base64 images in the model context.
-The request confidence threshold is applied inside the official processor before
-full-resolution mask interpolation, then checked again by RoboClaw while
-normalizing results. This avoids materializing rejected masks on constrained
-GPUs while preserving the public threshold contract.
+`get_target_object_pose` depends on the Gazebo/RealSense LCM bridge and the SAM3
+perception service already running. Its public input is intentionally just the
+target prompt. The MCP layer uses one fixed LCM request/response protocol.
 
 ## Result files
 
-Each successful current-view request writes one aggregate JSON file plus per-frame
-SAM3 artifact directories:
+Each successful request keeps the existing SAM3 worker artifacts:
 
 ```text
-runtime_data/sam3/current_view/<request-id>/result.json
-runtime_data/sam3/current_view/<request-id>/frames/frame_000.png
-runtime_data/sam3/<frame-request-id>/result.json
-runtime_data/sam3/<frame-request-id>/masks.npz
-runtime_data/sam3/<frame-request-id>/mask_000.png
-runtime_data/sam3/<frame-request-id>/overlay.png
+runtime_data/sam3/<request-id>/result.json
+runtime_data/sam3/<request-id>/masks.npz
+runtime_data/sam3/<request-id>/mask_000.png
+runtime_data/sam3/<request-id>/overlay.png
 ```
 
-`masks.npz` contains a boolean array named `masks` with shape `(N, H, W)`. Every mask PNG is single-channel with values 0 and 255. The aggregate current-view JSON records the camera topic, prompt, processed frames, best detection score, captured frame paths, and each frame's SAM3 artifact paths. A no-detection frame contains an empty `(0, H, W)` mask array and an overlay of the input image.
+`masks.npz` contains a boolean array named `masks` with shape `(N, H, W)`.
+Every mask PNG is single-channel with values 0 and 255. A no-detection request
+contains an empty `(0, H, W)` mask array and an overlay of the input image. The
+temporary RGB input is not retained.
 
 Artifacts are written to a hidden temporary sibling directory and renamed only after every file is complete. Existing request directories are never overwritten.
 

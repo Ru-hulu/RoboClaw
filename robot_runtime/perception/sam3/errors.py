@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
+from enum import Enum
 
 
-class Sam3ErrorCode(StrEnum):
+class Sam3ErrorCode(str, Enum):
     """Machine-readable failures returned by the runtime and MCP tools."""
 
     INVALID_INPUT = "INVALID_INPUT"

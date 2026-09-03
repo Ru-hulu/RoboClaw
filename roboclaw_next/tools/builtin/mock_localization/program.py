@@ -6,7 +6,7 @@ import asyncio
 import shlex
 import sys
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 from pathlib import Path
 
 
@@ -15,7 +15,7 @@ POSE_SERVICE_TYPE = "roboclaw_interfaces/srv/GetMockLocalizationPose"
 ROS_SETUP_PATH = "/opt/ros/humble/setup.bash"
 
 
-class MockLocalizationState(StrEnum):
+class MockLocalizationState(str, Enum):
     """Lifecycle states exposed by the process manager."""
 
     IDLE = "idle"

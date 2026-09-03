@@ -15,7 +15,7 @@ from .models import (
 
 
 DEFAULT_COLOR_IMAGE_TOPIC = "/head_realsense/color/image_raw"
-DEFAULT_DEPTH_IMAGE_TOPIC = "/head_realsense/depth/image_raw"
+DEFAULT_DEPTH_IMAGE_TOPIC = "/head_realsense/depth/depth/image_raw"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 
 

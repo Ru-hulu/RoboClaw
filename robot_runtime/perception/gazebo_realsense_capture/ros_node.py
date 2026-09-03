@@ -4,20 +4,23 @@ from __future__ import annotations
 
 import argparse
 import json
-import struct
 import time
 from collections.abc import Sequence
 
 import lcm
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 
+from robot_runtime.perception.lcm_protocol import (
+    COLOR_IMAGE_CHANNEL,
+    DEPTH_IMAGE_CHANNEL,
+    encode_image_message,
+)
+
 
 LOOP_HZ = 30.0
-COLOR_LCM_CHANNEL = "ROBOCLAW_REALSENSE_COLOR_IMAGE"
-DEPTH_LCM_CHANNEL = "ROBOCLAW_REALSENSE_DEPTH_IMAGE"
-_HEADER_LENGTH = struct.Struct("<I")
 
 
 class GazeboRealsenseLcmBridgeNode(Node):
@@ -47,11 +50,11 @@ class GazeboRealsenseLcmBridgeNode(Node):
 
     def _on_color(self, message: Image) -> None:
         self.color_received = True
-        self._lcm.publish(COLOR_LCM_CHANNEL, _encode_image_message("color", message))
+        self._lcm.publish(COLOR_IMAGE_CHANNEL, _encode_ros_image("color", message))
 
     def _on_depth(self, message: Image) -> None:
         self.depth_received = True
-        self._lcm.publish(DEPTH_LCM_CHANNEL, _encode_image_message("depth", message))
+        self._lcm.publish(DEPTH_IMAGE_CHANNEL, _encode_ros_image("depth", message))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -62,7 +65,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         node = GazeboRealsenseLcmBridgeNode(arguments)
         deadline = time.monotonic() + arguments.frame_timeout_sec
         startup_reported = False
-        rate = node.create_rate(LOOP_HZ)
         while rclpy.ok():
             if not startup_reported and node.received_first_message:
                 _emit_stdout(
@@ -70,8 +72,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "ok": True,
                         "color_image_received": node.color_received,
                         "depth_image_received": node.depth_received,
-                        "color_lcm_channel": COLOR_LCM_CHANNEL,
-                        "depth_lcm_channel": DEPTH_LCM_CHANNEL,
+                        "color_lcm_channel": COLOR_IMAGE_CHANNEL,
+                        "depth_lcm_channel": DEPTH_IMAGE_CHANNEL,
                         "message": "Gazebo RealSense node received its first image message.",
                     }
                 )
@@ -86,8 +88,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     }
                 )
                 return 1
-            rclpy.spin_once(node, timeout_sec=0.0)
-            rate.sleep()
+            rclpy.spin_once(node, timeout_sec=1.0 / LOOP_HZ)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        return 0
     finally:
         if node is not None:
             node.destroy_node()
@@ -105,10 +108,8 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _encode_image_message(kind: str, message: Image) -> bytes:
-    header = {
-        "schema": "roboclaw.camera_image.v1",
-        "kind": kind,
+def _encode_ros_image(kind: str, message: Image) -> bytes:
+    metadata = {
         "frame_id": message.header.frame_id,
         "stamp_sec": int(message.header.stamp.sec),
         "stamp_nanosec": int(message.header.stamp.nanosec),
@@ -117,18 +118,13 @@ def _encode_image_message(kind: str, message: Image) -> bytes:
         "encoding": message.encoding,
         "is_bigendian": int(message.is_bigendian),
         "step": int(message.step),
-        "data_size": len(message.data),
     }
-    header_bytes = json.dumps(
-        header,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return _HEADER_LENGTH.pack(len(header_bytes)) + header_bytes + bytes(message.data)
+    return encode_image_message(kind, metadata, bytes(message.data))
 
 
 def _emit_stdout(payload: dict[str, object]) -> None:
     print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), flush=True)
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
+from enum import Enum
 
 from pydantic import BaseModel
 
 
-class GazeboRealsenseCameraState(StrEnum):
+class GazeboRealsenseCameraState(str, Enum):
     """Lifecycle state for the Gazebo RealSense listener process."""
 
     STOPPED = "stopped"
