@@ -9,15 +9,11 @@ The FastMCP server exposes only lifecycle controls for the SAM3 service:
 `stop_sam3_perception`. Inference RPC clients will belong to separate business
 Tools after the RPC interface is defined.
 
-The current runtime service still contains the temporary LCM target-pose path.
-That transport is intentionally outside the lifecycle manager and will be
-reworked separately.
-
-Depth-to-3D projection is not implemented yet. A successful segmentation
-therefore returns `pose_valid=false`; the received depth frame is retained only
-for the duration of that request. The RGB frame is written to a temporary PNG
-because the existing worker accepts image paths, then deleted immediately after
-the worker replies.
+The lifecycle manager starts `service.py`. The service starts one isolated
+JSON-Lines worker, waits for the model-ready handshake, reports readiness to the
+manager, and remains alive while the worker is healthy. `worker_client.py` owns
+the worker subprocess and its stdin/stdout protocol. No camera transport or
+inference RPC is implemented in the service yet.
 
 The external SAM3 checkout must use:
 
@@ -88,8 +84,7 @@ Set these variables in the process that launches `roboclaw_next.tools.mcp_server
 | `ROBOCLAW_SAM3_INPUT_ROOTS` | repository root | Allowed local input roots separated by the platform path separator |
 | `ROBOCLAW_SAM3_OUTPUT_ROOT` | `runtime_data/sam3` | Result directory root |
 | `ROBOCLAW_SAM3_REQUEST_TIMEOUT_SEC` | `120` | Model-start and inference timeout |
-| `ROBOCLAW_SAM3_SERVICE_PYTHON` | MCP process Python | Python executable with `lcm` and `Pillow` used to start the LCM service |
-| `ROBOCLAW_SAM3_CAPTURE_ROOT` | `runtime_data/sam3/lcm` | Parent directory for request-scoped temporary RGB files |
+| `ROBOCLAW_SAM3_SERVICE_PYTHON` | MCP process Python | Python executable used to start the SAM3 service process |
 
 Example with deployment-neutral paths:
 
@@ -101,7 +96,6 @@ export ROBOCLAW_SAM3_INPUT_ROOTS=/data/robot_images
 export ROBOCLAW_SAM3_OUTPUT_ROOT=/var/lib/roboclaw/sam3-results
 export ROBOCLAW_SAM3_REQUEST_TIMEOUT_SEC=120
 export ROBOCLAW_SAM3_SERVICE_PYTHON=/opt/roboclaw-agent-venv/bin/python
-export ROBOCLAW_SAM3_CAPTURE_ROOT=/var/lib/roboclaw/sam3-capture
 ```
 
 Verify deployment artifacts before the first inference:
@@ -115,9 +109,9 @@ sha256sum "$ROBOCLAW_SAM3_CHECKPOINT"
 The worker repeats these checks before loading the model: it requires the exact
 pinned Git revision, rejects a dirty checkout, checks the checkpoint byte size,
 and computes and compares the complete checkpoint SHA-256. A malformed optional
-SAM3 manager setting is reported by the SAM3 inference tool as
-`MODEL_UNAVAILABLE`; it does not prevent the MCP server or unrelated robot tools
-from starting.
+SAM3 setting is reported as a service startup failure through the lifecycle Tool
+status; it does not prevent the MCP server or unrelated robot tools from
+starting.
 
 ## CLI
 
@@ -136,15 +130,13 @@ Run the JSON Lines worker manually:
 python -m robot_runtime.perception.sam3 serve
 ```
 
-Run the LCM perception service without MCP:
+Run the long-running SAM3 service without MCP:
 
 ```bash
-python -m robot_runtime.perception.sam3.lcm_service
+python -m robot_runtime.perception.sam3.service
 ```
 
 The worker writes protocol JSON only to stdout and operator logs to stderr.
-Each protocol message is limited to 4 MiB; an oversized or unreadable message
-stops the worker and returns `WORKER_EXITED` instead of leaking a pipe error.
 
 ## FastMCP tools
 
@@ -169,8 +161,7 @@ runtime_data/sam3/<request-id>/overlay.png
 
 `masks.npz` contains a boolean array named `masks` with shape `(N, H, W)`.
 Every mask PNG is single-channel with values 0 and 255. A no-detection request
-contains an empty `(0, H, W)` mask array and an overlay of the input image. The
-temporary RGB input is not retained.
+contains an empty `(0, H, W)` mask array and an overlay of the input image.
 
 Artifacts are written to a hidden temporary sibling directory and renamed only after every file is complete. Existing request directories are never overwritten.
 
@@ -188,7 +179,9 @@ Artifacts are written to a hidden temporary sibling directory and renamed only a
 | `OUTPUT_EXISTS` | The request ID already has a completed directory |
 | `OUTPUT_WRITE_FAILED` | Result files could not be written atomically |
 
-Runtime errors are returned as structured tool results. They do not terminate the MCP stdio server.
+Worker request errors use structured JSON responses. Service startup errors are
+reported through the lifecycle Tool status and do not terminate the MCP stdio
+server.
 
 ## Validation
 
@@ -200,4 +193,7 @@ python -m compileall -q roboclaw_next/tools/builtin/sam3_segmentation
 python -m robot_runtime.perception.sam3 --help
 ```
 
-Real deployment acceptance additionally requires a successful RTX 4060 inference below 6144 MiB SAM3 peak reserved VRAM, a second request that reuses the worker, and evidence that explicit unload and idle eviction return GPU memory close to baseline.
+Real deployment acceptance additionally requires a successful RTX 4060
+inference below 6144 MiB SAM3 peak reserved VRAM, a second request that reuses
+the worker, and evidence that `stop_sam3_perception` returns GPU memory close to
+baseline.

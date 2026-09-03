@@ -42,8 +42,8 @@ def main(
         _emit(stdout, payload)
         return 1
 
-    # MCP 或 ROS one-shot 节点使用 serve 分支启动 SAM3 worker。
-    # 模型在 worker 内加载一次，请求通过 stdin/stdout JSON Lines 传递。
+    # SAM3 Service 使用 serve 分支启动独立 Worker。模型只加载一次，
+    # Service 与 Worker 之间通过 stdin/stdout JSON Lines 传递请求和结果。
     if arguments.command == "serve":
         return Sam3Worker(config, engine_factory).serve(stdin, stdout, stderr)
 

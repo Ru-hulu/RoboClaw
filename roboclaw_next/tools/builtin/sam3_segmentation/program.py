@@ -16,7 +16,7 @@ from .models import (
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
-DEFAULT_SERVICE_MODULE = "robot_runtime.perception.sam3.lcm_service"
+DEFAULT_SERVICE_MODULE = "robot_runtime.perception.sam3.service"
 DEFAULT_STARTUP_TIMEOUT_SEC = 120.0
 DEFAULT_TERMINATION_TIMEOUT_SEC = 5.0
 

@@ -566,6 +566,9 @@ GPU 模型 + 本地结果文件
 | --- | --- | --- |
 | MCP Tool 契约 | `roboclaw_next/tools/builtin/sam3_segmentation/tool.py` | 定义三个生命周期 Tool |
 | 常驻感知服务 manager | `roboclaw_next/tools/builtin/sam3_segmentation/program.py` | 启动、状态查询和停止进程 |
+| SAM3 Service | `robot_runtime/perception/sam3/service.py` | 启动并看护模型 Worker；RPC 接口暂未实现 |
+| Worker 客户端 | `robot_runtime/perception/sam3/worker_client.py` | 管理 Worker 子进程和 JSON Lines 通信 |
+| SAM3 推理 Worker | `robot_runtime/perception/sam3/worker.py` | 加载模型、执行推理并保持模型常驻 |
 | SAM3 推理适配 | `robot_runtime/perception/sam3/` | 输入校验、官方模型调用和结果落盘 |
 
 官方 SAM3 源码、训练代码和权重不进入 RoboClaw Git。仓库只保存推理适配层，外部 checkout 与 checkpoint 通过环境变量接入。
