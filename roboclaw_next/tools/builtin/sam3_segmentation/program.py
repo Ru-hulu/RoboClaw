@@ -58,6 +58,7 @@ class Sam3PerceptionManager:
         self._lifecycle_lock = asyncio.Lock()
         self._process: asyncio.subprocess.Process | None = None
         self._state = Sam3PerceptionState.STOPPED
+        self._model_loaded = False
         self._last_error: str | None = None
         self._message = "SAM3 perception service is stopped."
 
@@ -71,6 +72,7 @@ class Sam3PerceptionManager:
                 self._message = "SAM3 perception service is already running."
                 return self._status()
 
+            self._model_loaded = False
             try:
                 config = self._resolve_config()
             except ValueError as error:
@@ -125,6 +127,7 @@ class Sam3PerceptionManager:
                 return self._status()
 
             self._state = Sam3PerceptionState.RUNNING
+            self._model_loaded = True
             self._message = "SAM3 perception service is running."
             return self._status()
 
@@ -147,6 +150,7 @@ class Sam3PerceptionManager:
                 )
             self._process = None
             self._state = Sam3PerceptionState.STOPPED
+            self._model_loaded = False
             self._message = "SAM3 perception service is stopped."
             return self._status()
 
@@ -157,6 +161,7 @@ class Sam3PerceptionManager:
 
     def _refresh_state(self) -> None:
         if self._process is None:
+            self._model_loaded = False
             if self._state != Sam3PerceptionState.FAILED:
                 self._state = Sam3PerceptionState.STOPPED
             return
@@ -167,6 +172,7 @@ class Sam3PerceptionManager:
             return
         if self._state != Sam3PerceptionState.STOPPED:
             self._state = Sam3PerceptionState.FAILED
+            self._model_loaded = False
             self._message = (
                 "SAM3 perception service exited with code "
                 f"{self._process.returncode}."
@@ -180,6 +186,7 @@ class Sam3PerceptionManager:
             return_code=(
                 self._process.returncode if self._process is not None else None
             ),
+            model_loaded=self._model_loaded,
             last_error=self._last_error,
             message=self._message,
         )

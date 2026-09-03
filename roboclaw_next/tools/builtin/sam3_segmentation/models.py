@@ -22,5 +22,6 @@ class Sam3PerceptionStatusResult(BaseModel):
     state: Sam3PerceptionState
     pid: int | None
     return_code: int | None
+    model_loaded: bool
     last_error: str | None
     message: str

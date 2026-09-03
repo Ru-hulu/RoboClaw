@@ -39,8 +39,9 @@ def register_sam3_segmentation_tools(
         name="get_sam3_perception_status",
         title="Get SAM3 Perception Status",
         description=(
-            "Read the SAM3 perception service process state. This does not start "
-            "SAM3, load the model, or submit an inference request."
+            "Read the SAM3 perception service process state and whether the model "
+            "finished loading. This does not start SAM3, load the model, or submit "
+            "an inference request."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=True,

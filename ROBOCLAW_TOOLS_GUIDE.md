@@ -198,8 +198,8 @@ roboclaw_tools__start_mock_localization
 | 路径跟踪 | `stop_path_tracking` | 停止 MPC 进程 | stopped 状态 |
 | OpenArm | `get_openarm_ee_pose` | 进程内 FK | 末端位姿 |
 | OpenArm | `plan_openarm_reach` | 进程内 IK | 关节轨迹和最终误差 |
-| SAM3 | `start_sam3_perception` | 启动常驻感知服务 | state、PID、退出码 |
-| SAM3 | `get_sam3_perception_status` | 查询 manager | state、PID、退出码 |
+| SAM3 | `start_sam3_perception` | 启动常驻感知服务 | state、PID、模型状态 |
+| SAM3 | `get_sam3_perception_status` | 查询 manager | state、PID、模型状态 |
 | SAM3 | `stop_sam3_perception` | 停止常驻感知服务 | stopped 状态 |
 
 当前工具包含四种典型模式：
@@ -575,7 +575,7 @@ GPU 模型 + 本地结果文件
 | Tool | 输入 | 是否加载模型 | 用途 |
 | --- | --- | --- | --- |
 | `start_sam3_perception` | 无 | 是；由常驻服务加载 | 启动 SAM3 perception service |
-| `get_sam3_perception_status` | 无 | 否 | 查看进程状态、PID 和退出码 |
+| `get_sam3_perception_status` | 无 | 否 | 查看进程状态、PID 和模型加载状态 |
 | `stop_sam3_perception` | 无 | 否；只会停止 | 停止 SAM3 perception service |
 
 这三个 Tool 共用同一个 `Sam3PerceptionManager`，只管理同一个常驻服务

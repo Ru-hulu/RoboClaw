@@ -149,7 +149,8 @@ stops the worker and returns `WORKER_EXITED` instead of leaking a pipe error.
 ## FastMCP tools
 
 - `start_sam3_perception()` starts the long-running SAM3 perception service.
-- `get_sam3_perception_status()` reads the managed service process state.
+- `get_sam3_perception_status()` reads the managed service process state and
+  reports whether its startup handshake confirmed that the model was loaded.
 - `stop_sam3_perception()` stops the managed service process.
 
 These Tools do not accept prompts or perform inference. Future business Tools
