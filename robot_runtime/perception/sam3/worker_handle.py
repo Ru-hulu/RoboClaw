@@ -1,4 +1,4 @@
-"""Client for the isolated SAM3 JSON-Lines worker process."""
+"""Handle for the isolated SAM3 JSON-Lines worker process."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ WORKER_RESPONSE_TIMEOUT_SEC = 120.0
 DEFAULT_CONFIDENCE_THRESHOLD = 0.5
 
 
-class Sam3WorkerClient:
+class Sam3WorkerHandle:
     """Start one SAM3 worker and exchange JSON-Lines messages with it."""
 
     def __init__(self) -> None:

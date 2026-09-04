@@ -20,14 +20,14 @@ from __future__ import annotations
 import json
 
 from .lcm_rgbd_receiver import LcmRgbdReceiver
-from .worker_client import Sam3WorkerClient
+from .worker_handle import Sam3WorkerHandle
 
 
 LCM_POLL_TIMEOUT_MS = 100
 
 
 def main() -> int:
-    worker = Sam3WorkerClient()
+    worker = Sam3WorkerHandle()
     try:
         worker.start()
         receiver = LcmRgbdReceiver()

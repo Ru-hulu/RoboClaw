@@ -51,7 +51,7 @@ class Sam3ServiceTest(unittest.TestCase):
         stdout = io.StringIO()
 
         with (
-            patch.object(service, "Sam3WorkerClient", return_value=worker),
+            patch.object(service, "Sam3WorkerHandle", return_value=worker),
             patch.object(service, "LcmRgbdReceiver", return_value=receiver),
             contextlib.redirect_stdout(stdout),
         ):

@@ -8,7 +8,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from robot_runtime.perception.lcm_protocol import DECODE_OK, DecodeImageResult
-from robot_runtime.perception.sam3 import worker_client
+from robot_runtime.perception.sam3 import worker_handle
 from robot_runtime.perception.sam3.worker import Sam3Worker
 
 
@@ -53,11 +53,11 @@ class WorkerFrameTest(unittest.TestCase):
             b"\x01\x02\x03",
         )
         process = FakeProcess()
-        client = worker_client.Sam3WorkerClient()
+        client = worker_handle.Sam3WorkerHandle()
         client._process = process  # type: ignore[assignment]
 
         with patch.object(
-            worker_client,
+            worker_handle,
             "_read_worker_message",
             return_value={
                 "ok": True,

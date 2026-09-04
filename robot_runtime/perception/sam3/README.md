@@ -11,10 +11,10 @@ Tools after the RPC interface is defined.
 
 The lifecycle manager starts `service.py`. The service starts one isolated
 JSON-Lines worker, waits for the model-ready handshake, reports readiness to the
-manager, and remains alive while the worker is healthy. `worker_client.py` owns
+manager, and remains alive while the worker is healthy. `worker_handle.py` owns
 the worker subprocess and its stdin/stdout protocol. The service also subscribes
 to the existing LCM RGB-D channels, but discards image messages while no capture
-request is active. `worker_client.infer_frame()` can send a captured color frame
+request is active. `worker_handle.infer_frame()` can send a captured color frame
 to the worker as Base64 inside the existing JSON-Lines protocol; the worker
 decodes it in memory without creating a temporary input image. The inference RPC
 is not implemented yet, so the service does not call this method yet.
