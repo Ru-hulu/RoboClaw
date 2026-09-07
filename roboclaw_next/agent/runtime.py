@@ -8,6 +8,7 @@ from roboclaw_next.agent.context_builder import ContextBuilder
 from roboclaw_next.agent.message import AgentMessage
 from roboclaw_next.agent.session import AgentSession
 from roboclaw_next.llm.openai_compatible import LLMProvider
+from roboclaw_next.llm.types import LLMResponse
 from roboclaw_next.tools import ToolExecutionContext, ToolRegistry, ToolResult
 
 
@@ -56,6 +57,7 @@ class AgentRuntime:
                     "[llm] tool_calls: "
                     f"{[tool_call.name for tool_call in response.tool_calls]}"
                 )
+                print(_context_usage_line(response, session, context_messages))
             if not response.has_tool_calls:
                 session.append(AgentMessage(role="assistant", content=response.content))
                 return response.content
@@ -99,6 +101,33 @@ class AgentRuntime:
                 )
 
         return None
+
+
+def _context_usage_line(
+    response: LLMResponse,
+    session: AgentSession,
+    context_messages: list[AgentMessage],
+) -> str:
+    """把本次模型调用的上下文用量整理成一行。
+
+    这里只做观测，不参与任何决策。`prompt_tokens` 由 Provider 返回，是本次请求
+    的真实输入用量；后续实现 token 预算时，可以用它校准本地估算。
+
+    `cursor` 变化说明这一次 build 触发了摘要，因此可以从这一行看出上下文在
+    哪一步被压缩、压缩前后差多少。
+    """
+
+    # Provider 未返回 usage 时（例如请求失败）显示 n/a，而不是 None。
+    prompt_tokens = response.usage.get("prompt_tokens", "n/a")
+    completion_tokens = response.usage.get("completion_tokens", "n/a")
+    summary_chars = len(session.summary) if session.summary else 0
+    return (
+        "[ctx] "
+        f"prompt={prompt_tokens} completion={completion_tokens} "
+        f"| sent={len(context_messages)}/{len(session.messages)} messages "
+        f"| cursor={session.summary_cursor} summary={summary_chars}ch"
+    )
+
 
 
 def _tool_names(tool_definitions: list[dict[str, Any]]) -> list[str]:
