@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import Any
 
+from roboclaw_next.agent.budget import Budget, ContextOverflow, TokenEstimator
 from roboclaw_next.agent.message import AgentMessage
 from roboclaw_next.agent.session import AgentSession
 from roboclaw_next.llm.openai_compatible import LLMProvider
@@ -25,14 +27,36 @@ class _ConversationTurn:
 class ContextBuilder:
     """保留近期完整轮次，并将更早的轮次压缩为滚动摘要。"""
 
-    def __init__(self, provider: LLMProvider, keep_recent_turns: int = 2) -> None:
+    def __init__(
+        self,
+        provider: LLMProvider,
+        keep_recent_turns: int = 2,
+        estimator: TokenEstimator | None = None,
+        budget: Budget | None = None,
+    ) -> None:
         if keep_recent_turns < 1:
             raise ValueError("keep_recent_turns must be at least 1.")
+        if (estimator is None) != (budget is None):
+            raise ValueError("estimator and budget must be provided together.")
         self.provider = provider
+        # keep_recent_turns 的角色是下界：保证最近这几轮永远保持原文，
+        # 无论预算多紧。真正决定「要不要压」的是 budget。
         self.keep_recent_turns = keep_recent_turns
+        self.estimator = estimator
+        self.budget = budget
 
-    async def build(self, session: AgentSession) -> list[AgentMessage]:
-        """构造本次模型调用使用的消息，并在需要时更新历史摘要。"""
+    async def build(
+        self,
+        session: AgentSession,
+        tool_definitions: list[dict[str, Any]] | None = None,
+    ) -> list[AgentMessage]:
+        """构造本次模型调用使用的消息，并在需要时更新历史摘要。
+
+        `tool_definitions` 参与预算估算 —— 工具定义每轮都发，是不可忽略的固定
+        开销，不计入就会显著低估这次请求的实际体积。
+
+        压缩之后仍然超出硬上限时抛 `ContextOverflow`。
+        """
 
         system_end, turns = _split_turns(session.messages)
 
@@ -42,8 +66,24 @@ class ContextBuilder:
         new_turns = [
             turn for turn in compressible_turns if turn.end > session.summary_cursor
         ] # 这里拿到的是还没有压缩的turn
-        if new_turns:
+        if new_turns and self._over_budget(session, system_end, tool_definitions):
             await self._update_summary(session, new_turns)
+
+        context = self._assemble(session, system_end)
+
+        # 超出硬上限时明确失败，而不是照发让 Provider 返回 400 —— 后者会把
+        # 报错文本当成模型回答写进历史，那一轮还会被判定为完整轮次、参与摘要。
+        if self.estimator is not None and self.budget is not None:
+            estimated = self._estimate(context, tool_definitions)
+            if estimated > self.budget.limit:
+                raise ContextOverflow(
+                    f"context is {estimated} tokens, limit is {self.budget.limit}; "
+                    "reduce the size of recent tool results or use a larger model"
+                )
+        return context
+
+    def _assemble(self, session: AgentSession, system_end: int) -> list[AgentMessage]:
+        """按当前的 summary 与 cursor 装配出这次要发送的消息。"""
 
         context = list(session.messages[:system_end]) # 拿到messages数组中最前面的systems
         if session.summary:
@@ -58,6 +98,34 @@ class ContextBuilder:
         context.extend(session.messages[history_start:]) # 这里是messages数组中被压缩信息后面的内容（近几次的对话）
         return context
 
+    def _over_budget(
+        self,
+        session: AgentSession,
+        system_end: int,
+        tool_definitions: list[dict[str, Any]] | None,
+    ) -> bool:
+        """判断是否会超出预算触发线。
+
+        没有配置预算时退回原有行为：只要存在可压缩的轮次就压缩。
+        """
+
+        if self.estimator is None or self.budget is None:
+            return True
+
+        candidate = self._assemble(session, system_end)
+        return self._estimate(candidate, tool_definitions) > self.budget.trigger
+
+    def _estimate(
+        self,
+        context: list[AgentMessage],
+        tool_definitions: list[dict[str, Any]] | None,
+    ) -> int:
+        assert self.estimator is not None
+        return self.estimator.estimate(
+            [message.to_provider_dict() for message in context],
+            tool_definitions,
+        )
+
     async def _update_summary(
         self,
         session: AgentSession,
@@ -71,7 +139,6 @@ class ContextBuilder:
         serialized_messages = json.dumps(
             [message.to_provider_dict() for message in messages_to_summarize],
             ensure_ascii=False,
-            indent=2,
         )
         response = await self.provider.chat_with_retry(
             [
