@@ -18,9 +18,11 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from pathlib import Path
 from typing import cast
 
 from roboclaw_next.agent import AgentMessage, AgentRuntime, AgentSession, ContextBuilder
+from roboclaw_next.agent.budget import Budget, TokenEstimator
 from roboclaw_next.llm import create_llm_provider
 from roboclaw_next.llm.types import ProviderName
 from roboclaw_next.tools import (
@@ -31,6 +33,35 @@ from roboclaw_next.tools import (
 )
 
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
+# 单次回复的最大输出长度。它同时是输入预算要扣掉的预留量 —— 窗口是输入和
+# 输出共享的，只按输入算会在生成阶段撞上限。
+MAX_OUTPUT_TOKENS = 1024
+
+
+def load_dotenv(path: Path) -> None:
+    """把仓库根目录 .env 中的键值读进 os.environ。
+
+    只支持 `KEY=VALUE` 和 `#` 注释这两种最基本的形式，不做变量展开、多行值和
+    转义处理；需要更完整的语义时再换成 python-dotenv。
+
+    已经存在于环境中的变量优先，因此 shell 里显式设置的值不会被 .env 覆盖。
+    """
+
+    if not path.is_file():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
 def resolve_provider_name() -> ProviderName:
     raw_provider = os.environ.get("ROBOCLAW_LLM_PROVIDER", "deepseek").lower()
     if raw_provider not in ("openai", "deepseek"):
@@ -39,6 +70,10 @@ def resolve_provider_name() -> ProviderName:
 
 
 async def main() -> None:
+    # 在读取任何配置之前载入 .env；MCP server 子进程通过 os.environ.copy()
+    # 继承这些变量，因此工具侧也能看到。
+    load_dotenv(REPOSITORY_ROOT / ".env")
+
     config = StdioMCPServerConfig(
         name="roboclaw_tools",
         command=sys.executable,
@@ -58,7 +93,7 @@ async def main() -> None:
         provider = create_llm_provider(
             resolve_provider_name(),
             temperature=0,
-            max_tokens=1024,
+            max_tokens=MAX_OUTPUT_TOKENS,
         )
         session = AgentSession(
             messages=[
@@ -73,8 +108,20 @@ async def main() -> None:
                 ),
             ]
         )
-        context_builder = ContextBuilder(provider, keep_recent_turns=2)
-        agent_runtime = AgentRuntime(provider, registry, context_builder)
+        # estimator 由 ContextBuilder 与 AgentRuntime 共用，这样校正系数在一处
+        # 累积：Runtime 每轮用真实用量校准它，ContextBuilder 用它判断预算。
+        estimator = TokenEstimator()
+        budget = Budget(
+            context_window=int(os.environ.get("ROBOCLAW_CONTEXT_WINDOW", "65536")),
+            reserve_output=MAX_OUTPUT_TOKENS,
+        )
+        context_builder = ContextBuilder(
+            provider,
+            keep_recent_turns=2,
+            estimator=estimator,
+            budget=budget,
+        )
+        agent_runtime = AgentRuntime(provider, registry, context_builder, estimator=estimator)
 
         print("\nEnter /exit to quit.")
         while True:
