@@ -79,3 +79,61 @@ class HybridAStarPlan(BaseModel):
         if self.success and not self.waypoints:
             raise ValueError("A successful plan must contain at least one waypoint.")
         return self
+
+
+class HybridAStarPlanSummary(BaseModel):
+    """`HybridAStarPlan` 面向模型的投影，不含 waypoint 数组。
+
+    而模型真正需要知道的只是（规划成功、多少个点、存在哪里）。
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    success: bool = Field(
+        strict=True,
+        description="Whether a collision-free path was found.",
+    )
+    frame_id: str = Field(
+        strict=True,
+        description="Coordinate frame of the planned path.",
+    )
+    waypoint_count: int = Field(
+        strict=True,
+        ge=0,
+        description="Number of waypoints in the planned path.",
+    )
+    map_path: str = Field(
+        strict=True,
+        description="Fixed PNG map used for this plan.",
+    )
+    path_file: str | None = Field(
+        default=None,
+        description=(
+            "JSON file holding the planned path. Pass this to "
+            "start_path_tracking; the path itself is not returned here."
+        ),
+    )
+    planning_time_ms: float = Field(
+        strict=True,
+        ge=0,
+        allow_inf_nan=False,
+        description="Time spent inside the planner in milliseconds.",
+    )
+    message: str = Field(
+        strict=True,
+        description="Planning outcome or failure reason.",
+    )
+
+    @classmethod
+    def from_plan(cls, plan: HybridAStarPlan) -> Self:
+        """从完整规划结果投影出面向模型的摘要。"""
+
+        return cls(
+            success=plan.success,
+            frame_id=plan.frame_id,
+            waypoint_count=plan.waypoint_count,
+            map_path=plan.map_path,
+            path_file=plan.path_file,
+            planning_time_ms=plan.planning_time_ms,
+            message=plan.message,
+        )
