@@ -134,6 +134,18 @@ class AgentRuntime:
                     )
                 )
 
+        # 轮数耗尽时补一条不带 tool_calls 的 assistant message。否则这一轮的
+        # 最后一条是 tool message，_split_turns 会认为 turn 未完成，用户再发
+        # 下一条消息时 ContextBuilder 就会直接抛 ValueError。
+        session.append(
+            AgentMessage(
+                role="assistant",
+                content=(
+                    f"Reached the limit of {max_iterations} tool-calling "
+                    "iterations for this turn; no final answer was produced."
+                ),
+            )
+        )
         return None
 
 
