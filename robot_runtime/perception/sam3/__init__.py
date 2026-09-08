@@ -1,7 +1,7 @@
-"""Inference-only SAM3 runtime for local images."""
+"""SAM3 perception runtime package."""
 
-from .errors import Sam3ErrorCode, Sam3RuntimeError
-from .models import Sam3Instance, Sam3Request, Sam3Result
+from .engine.errors import Sam3ErrorCode, Sam3RuntimeError
+from .engine.models import Sam3Instance, Sam3Request, Sam3Result
 
 __all__ = [
     "Sam3ErrorCode",

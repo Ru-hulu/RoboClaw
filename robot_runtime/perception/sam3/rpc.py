@@ -19,14 +19,6 @@ DEFAULT_CONFIDENCE_THRESHOLD = 0.5
 DEFAULT_FRAME_TIMEOUT_SEC = 3.0
 DEFAULT_RPC_TIMEOUT_SEC = 10.0
 
-IDENTITY_POSE = (
-    (1.0, 0.0, 0.0, 0.0),
-    (0.0, 1.0, 0.0, 0.0),
-    (0.0, 0.0, 1.0, 0.0),
-    (0.0, 0.0, 0.0, 1.0),
-)
-
-
 @dataclass(frozen=True)
 class Sam3SegmentRequest:
     request_id: str
@@ -125,7 +117,11 @@ class Sam3RpcServer:
         request = self._server.poll(timeout_ms)
         if request is None:
             return None
-        return Sam3SegmentRequest.from_rpc_request(request)
+        try:
+            return Sam3SegmentRequest.from_rpc_request(request)
+        except ValueError as error:
+            self.respond_error(request.request_id, str(error))
+            return None
 
     def respond_success(
         self,
@@ -133,8 +129,8 @@ class Sam3RpcServer:
         sam3_result: dict[str, object],
     ) -> None:
         result = dict(sam3_result)
-        result["pose_valid"] = False
-        result["object_pose"] = [list(row) for row in IDENTITY_POSE]
+        result.setdefault("position_valid", False)
+        result.setdefault("position", None)
         self._server.respond(
             request_id,
             Sam3SegmentResponse(ok=True, result=result).to_dict(),

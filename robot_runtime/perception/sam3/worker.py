@@ -14,11 +14,11 @@ from typing import TextIO
 
 from PIL import Image
 
-from .backend import OfficialSam3Backend
-from .config import Sam3RuntimeConfig
-from .engine import Sam3Engine
-from .errors import Sam3ErrorCode, Sam3RuntimeError
-from .models import Sam3Request
+from .engine.backend import OfficialSam3Backend
+from .engine.config import Sam3RuntimeConfig
+from .engine.engine import Sam3Engine
+from .engine.errors import Sam3ErrorCode, Sam3RuntimeError
+from .engine.models import Sam3Request
 
 
 EngineFactory = Callable[[Sam3RuntimeConfig], Sam3Engine]

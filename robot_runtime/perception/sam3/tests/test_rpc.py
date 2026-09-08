@@ -52,7 +52,10 @@ class Sam3RpcTest(unittest.TestCase):
             self.assertEqual(request.frame_timeout_sec, 2.0)
             self.server.respond_success(
                 request.request_id,
-                {"instance_count": 1, "instances": []},
+                {
+                    "instance_count": 1,
+                    "instances": [],
+                },
             )
 
         original_publish = self.bus.publish
@@ -66,16 +69,8 @@ class Sam3RpcTest(unittest.TestCase):
         )
 
         self.assertEqual(result["instance_count"], 1)
-        self.assertEqual(result["pose_valid"], False)
-        self.assertEqual(
-            result["object_pose"],
-            [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ],
-        )
+        self.assertEqual(result["position_valid"], False)
+        self.assertIsNone(result["position"])
 
     def test_client_raises_on_error_response(self) -> None:
         def serve_error(channel: str, payload: bytes) -> None:
@@ -90,6 +85,28 @@ class Sam3RpcTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "camera timeout"):
             self.client.segment("cube", timeout_sec=0.1)
+
+    def test_server_replies_to_invalid_request_without_returning_work(self) -> None:
+        responses: list[bytes] = []
+
+        def record_response(channel: str, payload: bytes) -> None:
+            if channel == SAM3_RPC_RESPONSE_CHANNEL:
+                responses.append(payload)
+            original_publish(channel, payload)
+
+        original_publish = self.bus.publish
+        self.bus.publish = record_response  # type: ignore[method-assign]
+
+        original_publish(
+            SAM3_RPC_REQUEST_CHANNEL,
+            b'{"request_id":"bad-request","method":"unknown"}',
+        )
+
+        request = self.server.poll(0)
+
+        self.assertIsNone(request)
+        self.assertIn(b'"ok":false', responses[0])
+        self.assertIn(b"unsupported SAM3 RPC method", responses[0])
 
     def test_request_and_response_channels_are_distinct(self) -> None:
         self.assertNotEqual(SAM3_RPC_REQUEST_CHANNEL, SAM3_RPC_RESPONSE_CHANNEL)

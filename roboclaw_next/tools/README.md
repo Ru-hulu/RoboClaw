@@ -34,6 +34,10 @@ Current built-in capabilities:
   (`start_sam3_perception`, `get_sam3_perception_status`,
   `stop_sam3_perception`). SAM3 inference RPC clients belong to separate
   business Tools and are not part of this lifecycle manager.
+- `target_object_position/`: business Tool `get_target_object_position` that
+  calls the SAM3 LCM RPC interface with a natural-language prompt and returns a
+  position-shaped result. The current implementation reports `position_valid`
+  as false until depth projection is implemented.
 
 ## MCP Tool-Call Chain
 

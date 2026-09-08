@@ -40,7 +40,7 @@ class Sam3RuntimeConfig:
         root = (
             repository_root
             if repository_root is not None
-            else Path(__file__).resolve().parents[3]
+            else Path(__file__).resolve().parents[4]
         ).resolve()
 
         source_value = values.get("ROBOCLAW_SAM3_SOURCE", "").strip()
