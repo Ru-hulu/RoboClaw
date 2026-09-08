@@ -12,6 +12,13 @@ from roboclaw_next.agent.session import AgentSession
 from roboclaw_next.llm.openai_compatible import LLMProvider
 
 
+# 摘要调用的输出上限，与普通回复分开。摘要要背的历史随会话单调增长，而普通回复的长度不变；共用一个上限会让摘要在会话变长后被截断。
+SUMMARY_MAX_TOKENS = 4096
+
+# 写进提示词的软目标
+SUMMARY_TARGET_CHARS = 1200
+
+
 @dataclass(frozen=True)
 class _ConversationTurn:
     """一轮对话的消息区间。
@@ -150,6 +157,12 @@ class ContextBuilder:
                         "只输出更新后的累计摘要。"
                         "保留用户目标、已确认决定、重要工具结果、"
                         "失败原因和未解决问题，不要添加推测。"
+                        f"整段摘要控制在 {SUMMARY_TARGET_CHARS} 字以内。"
+                        "空间不够时按这个顺序取舍："
+                        "未解决问题和失败原因必须完整保留，"
+                        "其次是用户目标和已确认决定，"
+                        "已完成步骤的细节可以合并成一句。"
+                        "宁可写得更概括，也不要写到一半被截断。"
                     ),
                 },
                 {
@@ -162,9 +175,17 @@ class ContextBuilder:
             ],
             tools=None,
             temperature=0,
+            max_tokens=SUMMARY_MAX_TOKENS,
         )
         if response.finish_reason == "error":
             raise RuntimeError(response.content or "Failed to summarize session history.")
+        if response.finish_reason == "length":
+            # 生成的摘要超出了 SUMMARY_MAX_TOKENS，说明模型没有按要求压缩。
+            # 通常是随着对话增加以及`未解决问题和失败原因必须完整保留`的要求，导致压缩后摘要还是超出限制。
+            raise RuntimeError(
+                "Session summarization was truncated at the "
+                f"{SUMMARY_MAX_TOKENS}-token output limit."
+            )
 
         summary = (response.content or "").strip()
         if not summary:
