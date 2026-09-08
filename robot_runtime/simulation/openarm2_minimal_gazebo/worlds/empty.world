@@ -80,6 +80,144 @@
         </visual>
       </link>
     </model>
+    <model name="room_walls">
+      <static>true</static>
+      <link name="north_wall">
+        <pose>0 10 1 0 0 0</pose>
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>20 0.12 2</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>20 0.12 2</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.7 0.72 0.74 1</ambient>
+            <diffuse>0.7 0.72 0.74 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+        </visual>
+      </link>
+      <link name="south_wall">
+        <pose>0 -10 1 0 0 0</pose>
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>20 0.12 2</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>20 0.12 2</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.7 0.72 0.74 1</ambient>
+            <diffuse>0.7 0.72 0.74 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+        </visual>
+      </link>
+      <link name="east_wall">
+        <pose>10 0 1 0 0 0</pose>
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>0.12 20 2</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>0.12 20 2</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.7 0.72 0.74 1</ambient>
+            <diffuse>0.7 0.72 0.74 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+        </visual>
+      </link>
+      <link name="west_wall">
+        <pose>-10 0 1 0 0 0</pose>
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>0.12 20 2</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>0.12 20 2</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.7 0.72 0.74 1</ambient>
+            <diffuse>0.7 0.72 0.74 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <model name="room_partitions">
+      <static>true</static>
+      <link name="left_partition">
+        <pose>-3.2 1.2 0.8 0 0 0</pose>
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>0.12 5.0 1.6</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>0.12 5.0 1.6</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.76 0.76 0.72 1</ambient>
+            <diffuse>0.76 0.76 0.72 1</diffuse>
+            <specular>0.08 0.08 0.08 1</specular>
+          </material>
+        </visual>
+      </link>
+      <link name="right_partition">
+        <pose>4.0 -3.0 0.8 0 0 0</pose>
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>4.8 0.12 1.6</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>4.8 0.12 1.6</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.76 0.76 0.72 1</ambient>
+            <diffuse>0.76 0.76 0.72 1</diffuse>
+            <specular>0.08 0.08 0.08 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
     <model name="work_table">
       <static>true</static>
       <pose>1.2 0 0 0 0 0</pose>
