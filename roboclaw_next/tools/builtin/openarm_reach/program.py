@@ -1,18 +1,47 @@
 """In-process OpenArm FK/IK used by the MCP tools.
 
-This layer only converts the planner's tuples into JSON-friendly dictionaries.
-It does not load MuJoCo or spawn a process.
+Joint angles come from a process-wide listener that continuously caches the
+robot's `/joint_states` topic. They are never a tool parameter: the model cannot
+observe them, so anything it typed would be a guess. This layer reads the real
+state, calls the pure kinematics, and converts the planner's tuples into
+JSON-friendly dictionaries.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 
+from robot_runtime.openarm_control import read_arm_joint_state
 from robot_runtime.openarm_ik import ORIGIN_FRAME, ReachPlan, fk, plan_reach
 
 
-def get_ee_pose(arm: str, joints: Sequence[float]) -> dict[str, object]:
-    """Read the EE pose[7] in the arm_origin frame."""
+async def read_joints(arm: str) -> list[float]:
+    """Read the latest fresh 7-joint snapshot, off the event loop."""
+
+    state = await asyncio.to_thread(read_arm_joint_state, arm)
+    return list(state.positions)
+
+
+async def get_ee_pose(arm: str) -> dict[str, object]:
+    """Read the EE pose[7] in the arm_origin frame from the current joints."""
+
+    return build_ee_pose(arm, await read_joints(arm))
+
+
+async def plan_to_xyz(
+    arm: str,
+    x: float,
+    y: float,
+    z: float,
+) -> dict[str, object]:
+    """Plan a reach from the current joints to an arm_origin xyz target."""
+
+    return plan_from_joints(arm, await read_joints(arm), x, y, z)
+
+
+def build_ee_pose(arm: str, joints: Sequence[float]) -> dict[str, object]:
+    """FK payload for a given joint vector. Pure; ROS is the caller's problem."""
 
     values = [float(value) for value in joints]
     return {
@@ -23,17 +52,20 @@ def get_ee_pose(arm: str, joints: Sequence[float]) -> dict[str, object]:
     }
 
 
-def plan_to_xyz(
+def plan_from_joints(
     arm: str,
     joints: Sequence[float],
     x: float,
     y: float,
     z: float,
 ) -> dict[str, object]:
-    """Plan a reach to an arm_origin xyz target, keeping the current EE orientation."""
+    """Plan from an explicit start, keeping the current EE orientation.
 
-    plan = plan_reach(arm, joints, (x, y, z))
-    return serialize_plan(plan)
+    Pure, so tests can pin a start configuration. The MCP tools never expose
+    this start to the model.
+    """
+
+    return serialize_plan(plan_reach(arm, joints, (x, y, z)))
 
 
 def serialize_plan(plan: ReachPlan) -> dict[str, object]:

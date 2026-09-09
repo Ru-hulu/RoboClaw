@@ -22,7 +22,10 @@ class EePoseResult(BaseModel):
         description="EE pose [px, py, pz, qw, qx, qy, qz] in metres and unit quaternion.",
     )
     joints: list[float] = Field(
-        description="Joint command used for FK: 7 arm joints, optionally plus gripper.",
+        description=(
+            "The 7 arm joints this pose was computed from, read from "
+            "/joint_states at call time."
+        ),
     )
 
 
@@ -96,9 +99,10 @@ def register_openarm_reach_tools(mcp: FastMCP) -> None:
         name="get_openarm_ee_pose",
         title="Get OpenArm EE Pose",
         description=(
-            "Read the OpenArm end-effector pose from the current joint command. "
-            "Poses are in the arm_origin frame, in metres. joints is 7 hinge "
-            "angles in radians, optionally followed by a gripper value that FK ignores."
+            "Read the OpenArm end-effector pose. The tool reads the arm's real "
+            "joint angles from a continuously updated /joint_states cache; do "
+            "not supply them. Poses are in the arm_origin frame, in metres. "
+            "Fails if the robot is not publishing fresh joint states."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=True,
@@ -112,24 +116,21 @@ def register_openarm_reach_tools(mcp: FastMCP) -> None:
             Literal["right", "left"],
             Field(description="Which arm to read."),
         ],
-        joints: Annotated[
-            list[float],
-            Field(description="Current 7 arm joints, or q8 with a trailing gripper."),
-        ],
     ) -> EePoseResult:
         """Return the current EE pose in the arm_origin frame."""
 
-        return EePoseResult.model_validate(get_ee_pose(arm, joints))
+        return EePoseResult.model_validate(await get_ee_pose(arm))
 
     @mcp.tool(
         name="plan_openarm_reach",
         title="Plan OpenArm Reach",
         description=(
             "Plan a joint trajectory that moves one OpenArm chain to an xyz "
-            "target in the arm_origin frame. Orientation is kept from the current "
-            "end-effector pose. This is an IK calculation only; it does not command "
-            "motors. Provide the current joints, then x, y, z in metres. "
-            "The joint trajectory itself will not be returned. Use ok and "
+            "target in the arm_origin frame. The plan starts from the arm's real "
+            "joint angles in a continuously updated /joint_states cache; do not "
+            "supply them. Orientation is kept from the current end-effector pose. "
+            "This is an IK calculation only; it does not command motors. Provide "
+            "x, y, z in metres. The joint trajectory itself will not be returned. Use ok and "
             "final_error_m to judge whether the target is reachable, and "
             "point_count to confirm a trajectory was produced."
         ),
@@ -144,10 +145,6 @@ def register_openarm_reach_tools(mcp: FastMCP) -> None:
         arm: Annotated[
             Literal["right", "left"],
             Field(description="Which arm to plan."),
-        ],
-        joints: Annotated[
-            list[float],
-            Field(description="Current 7 arm joints, or q8 with a trailing gripper."),
         ],
         x: Annotated[float, Field(description="Target x in the arm_origin frame, metres.")],
         y: Annotated[float, Field(description="Target y in the arm_origin frame, metres.")],
@@ -165,5 +162,5 @@ def register_openarm_reach_tools(mcp: FastMCP) -> None:
         #   1. 落盘。照 hybrid A* 的做法写 runtime_data/openarm/latest_reach_plan.json，
         #      并在 ReachPlanSummary 里加一个 plan_file 字段指给下游。
         #   2. 直接交给执行器。经 LCM/ROS 送出去，不落盘，规划与执行同一次调用完成。
-        plan = ReachPlanResult.model_validate(plan_to_xyz(arm, joints, x, y, z))
+        plan = ReachPlanResult.model_validate(await plan_to_xyz(arm, x, y, z))
         return ReachPlanSummary.from_plan(plan)
