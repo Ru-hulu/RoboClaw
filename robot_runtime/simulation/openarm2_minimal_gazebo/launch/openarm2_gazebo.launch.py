@@ -357,7 +357,6 @@ def _openarm_robot_description(robot_preset: str, controllers_path: str) -> str:
     )
     _add_text(rigid_cmd_vel_plugin, "command_topic", "cmd_vel")
     _add_text(rigid_cmd_vel_plugin, "command_timeout", "0.5")
-    _add_text(rigid_cmd_vel_plugin, "fixed_z", "0.0")
 
     return ET.tostring(root, encoding="unicode")
 

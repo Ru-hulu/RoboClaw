@@ -86,20 +86,6 @@ class Sam3Engine:
         """Run one inference from an image already decoded in the worker."""
 
         load_duration_ms = self.load()
-        return self._infer_image(
-            request,
-            image,
-            input_sha256,
-            load_duration_ms,
-        )
-
-    def _infer_image(
-        self,
-        request: Sam3Request,
-        image: Image.Image,
-        input_sha256: str,
-        load_duration_ms: float,
-    ) -> Sam3Result:
         raw_output, inference_duration_ms = self._backend.infer(
             image,
             request.text_prompt,

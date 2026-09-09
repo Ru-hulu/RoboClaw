@@ -9,8 +9,8 @@ import sys
 from collections.abc import Sequence
 from typing import TextIO
 
-from .config import Sam3RuntimeConfig
-from .errors import Sam3RuntimeError
+from .engine.config import Sam3RuntimeConfig
+from .engine.errors import Sam3RuntimeError
 from .worker import EngineFactory, Sam3Worker
 
 

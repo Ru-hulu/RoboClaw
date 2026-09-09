@@ -13,6 +13,7 @@ from .builtin.path_tracking.program import PathTrackingProcessManager
 from .builtin.path_tracking.tool import register_path_tracking_tools
 from .builtin.sam3_segmentation.program import Sam3PerceptionManager
 from .builtin.sam3_segmentation.tool import register_sam3_segmentation_tools
+from .builtin.target_object_position.tool import register_target_object_position_tool
 
 
 mcp = FastMCP("RoboClaw Tool Server", json_response=True)
@@ -27,6 +28,7 @@ register_hybrid_astar_planner_tool(mcp)
 register_openarm_reach_tools(mcp)
 register_sam3_segmentation_tools(mcp, sam3_manager)
 register_gazebo_realsense_camera_tool(mcp)
+register_target_object_position_tool(mcp)
 
 
 if __name__ == "__main__":

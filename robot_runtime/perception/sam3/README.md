@@ -6,8 +6,8 @@ This directory contains RoboClaw's inference adapter for text-prompted SAM3 imag
 
 The FastMCP server exposes only lifecycle controls for the SAM3 service:
 `start_sam3_perception`, `get_sam3_perception_status`, and
-`stop_sam3_perception`. Inference RPC clients will belong to separate business
-Tools after the RPC interface is defined.
+`stop_sam3_perception`. Inference calls are routed through the SAM3 LCM RPC
+protocol and will be exposed by separate business Tools.
 
 The lifecycle manager starts `service.py`. The service starts one isolated
 JSON-Lines worker, waits for the model-ready handshake, reports readiness to the
@@ -16,8 +16,35 @@ the worker subprocess and its stdin/stdout protocol. The service also subscribes
 to the existing LCM RGB-D channels, but discards image messages while no capture
 request is active. `worker_handle.infer_frame()` can send a captured color frame
 to the worker as Base64 inside the existing JSON-Lines protocol; the worker
-decodes it in memory without creating a temporary input image. The inference RPC
-is not implemented yet, so the service does not call this method yet.
+decodes it in memory without creating a temporary input image. When the service
+receives a SAM3 segmentation RPC request, it opens the LCM RGB-D capture gate,
+waits for the first color and depth frames, sends the color frame to the worker,
+and returns the segmentation result plus the captured depth frame through the
+RPC response channel. The depth frame is returned as its original LCM image
+header and Base64-encoded raw image bytes so downstream business Tools can
+compute lightweight 3D positions without changing the SAM3 worker.
+
+## Directory layout
+
+Top-level files describe process and communication boundaries:
+
+```text
+service.py           SAM3 service process loop
+rpc.py               SAM3 LCM RPC request/response contract
+lcm_rgbd_receiver.py Request-gated LCM RGB-D image receiver
+worker.py            Worker stdin/stdout JSON-Lines protocol
+worker_handle.py     Service-owned worker subprocess handle
+```
+
+The `engine/` package contains model-side implementation details:
+
+```text
+engine/backend.py Official SAM3 model adapter
+engine/engine.py  Inference normalization and result artifact writing
+engine/config.py  SAM3 source, checkpoint, device, and output config
+engine/models.py  Inference request/result data structures
+engine/errors.py  Stable model runtime errors
+```
 
 The external SAM3 checkout must use:
 
@@ -137,7 +164,7 @@ The worker writes protocol JSON only to stdout and operator logs to stderr.
 - `stop_sam3_perception()` stops the managed service process.
 
 These Tools do not accept prompts or perform inference. Future business Tools
-will call the SAM3 service through a separately defined RPC client.
+will call the SAM3 service through `Sam3RpcClient`.
 
 ## Result files
 
