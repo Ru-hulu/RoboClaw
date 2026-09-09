@@ -82,7 +82,10 @@ class HybridAStarPlan(BaseModel):
 
 
 class HybridAStarPlanSummary(BaseModel):
-    """LLM-facing projection of a full Hybrid A* plan."""
+    """`HybridAStarPlan` 面向模型的投影，不含 waypoint 数组。
+
+    而模型真正需要知道的只是（规划成功、多少个点、存在哪里）。
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -123,7 +126,7 @@ class HybridAStarPlanSummary(BaseModel):
 
     @classmethod
     def from_plan(cls, plan: HybridAStarPlan) -> Self:
-        """Project a complete plan into the compact result returned to the LLM."""
+        """从完整规划结果投影出面向模型的摘要。"""
 
         return cls(
             success=plan.success,

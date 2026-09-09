@@ -30,8 +30,8 @@ def register_hybrid_astar_planner_tool(
             "start pose, first call get_mock_localization to read the robot's "
             "current x, y, and yaw, then use that pose as the planner start. "
             "Mock localization must be running for get_mock_localization. "
-            "The path itself will not be returned. It is written to the JSON "
-            "file named by path_file, which start_path_tracking reads directly. "
+            "The path itself wll not be returned. It is written to the JSON file "
+            "named by path_file, which start_path_tracking reads directly. "
             "Use waypoint_count to confirm a path was produced, and pass "
             "path_file to start_path_tracking."
         ),
@@ -70,8 +70,8 @@ def register_hybrid_astar_planner_tool(
     ) -> HybridAStarPlanSummary:
         """Run one standalone Hybrid A* planning request.
 
-        The complete path is written to a JSON file for MPC. This Tool returns
-        only a compact summary so waypoint arrays do not enter the LLM context.
+        完整路径由 planner 写入 JSON 文件，MPC 通过文件路径读取，因此这里只把
+        摘要交给模型，不把 waypoint 数组带进上下文。
         """
 
         plan = await planner.plan(
