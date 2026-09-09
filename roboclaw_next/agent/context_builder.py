@@ -72,6 +72,8 @@ class ContextBuilder:
         new_turns = [
             turn for turn in compressible_turns if turn.end > session.summary_cursor
         ] # 这里拿到的是还没有压缩的turn
+        # TODO: 尤其这里的压缩单位是<user> <user>，所以如果用户下达了一次指令，这次本身的上下文很长，就会爆。
+        # 但是我们不考虑这种情况
         if new_turns and self._over_budget(session, system_end, tool_definitions):
             await self._update_summary(session, new_turns)
 
@@ -186,6 +188,18 @@ class ContextBuilder:
         session.summary_cursor = turns[-1].end
 
 
+# 示例：索引 0 是系统提示词，1–4 是已完成的第一轮，5 是尚未完成的第二轮。
+# call = ToolCall(id="call_001", name="get_status", arguments={})
+# messages = [
+#     AgentMessage(role="system", content="你是一个机器人助手。"),
+#     AgentMessage(role="user", content="查询机器人状态。"),
+#     AgentMessage(role="assistant", tool_calls=[call]),
+#     AgentMessage(role="tool", tool_call_id="call_001", name="get_status", content='{"battery": 80, "state": "idle"}'),
+#     AgentMessage(role="assistant", content="机器人当前空闲，剩余电量 80%。"),
+#     AgentMessage(role="user", content="它现在在哪里？"),
+# ]
+# 划分结果：system_end=1，turns=[(start=1, end=5, complete=True), (start=5, end=6, complete=False)]。
+
 def _split_turns(
     messages: list[AgentMessage],
 ) -> tuple[int, list[_ConversationTurn]]:
@@ -193,9 +207,6 @@ def _split_turns(
     while system_end < len(messages) and messages[system_end].role == "system":
         system_end += 1
     # 检查消息列表开头有多少条连续的 System Message。
-    if any(message.role == "system" for message in messages[system_end:]):
-        raise ValueError("System messages must appear only at the beginning of a Session.")
-
     if system_end < len(messages) and messages[system_end].role != "user":
         raise ValueError("A conversation turn must start with a user message.")
 

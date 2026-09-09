@@ -38,7 +38,7 @@ class AgentRuntime:
     ) -> str | None:
         """持续执行模型和工具调用，直到模型给出最终回答。"""
 
-        # max_iterations 用于防止 Agent 进入无限工具调用循环。
+        # 外部一次<usr>的调用，内部会进行若干步骤的iteration循环，当循环上下文超过了阈值的时候，就会进行summary的压缩
         for iteration in range(1, max_iterations + 1):
             tool_definitions = self.tool_registry.definitions()
             if trace:
