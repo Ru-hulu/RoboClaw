@@ -281,6 +281,86 @@ def _add_head_realsense(root: ET.Element) -> None:
     _add_text(depth_plugin, "max_depth", "10.0")
 
 
+def _add_base_livox_mid360(root: ET.Element) -> None:
+    lidar_link_name = "livox_mid360_link"
+
+    lidar_link = ET.Element("link", {"name": lidar_link_name})
+    body_visual = ET.SubElement(lidar_link, "visual", {"name": "livox_mid360_body_visual"})
+    _add_origin(body_visual, "0 0 0")
+    _add_cylinder(body_visual, "0.0325", "0.06")
+    body_material = ET.SubElement(body_visual, "material", {"name": "livox_mid360_gray"})
+    ET.SubElement(body_material, "color", {"rgba": "0.18 0.19 0.2 1"})
+
+    top_visual = ET.SubElement(lidar_link, "visual", {"name": "livox_mid360_top_visual"})
+    _add_origin(top_visual, "0 0 0.034")
+    _add_cylinder(top_visual, "0.024", "0.012")
+    top_material = ET.SubElement(top_visual, "material", {"name": "livox_mid360_black"})
+    ET.SubElement(top_material, "color", {"rgba": "0.03 0.035 0.04 1"})
+
+    lidar_collision = ET.SubElement(lidar_link, "collision", {"name": "livox_mid360_collision"})
+    _add_origin(lidar_collision, "0 0 0")
+    _add_cylinder(lidar_collision, "0.0325", "0.06")
+    _add_inertial(
+        lidar_link,
+        mass="0.265",
+        xyz="0 0 0",
+        ixx="0.00010",
+        iyy="0.00010",
+        izz="0.00014",
+    )
+    root.append(lidar_link)
+
+    lidar_joint = ET.Element(
+        "joint",
+        {"name": "livox_mid360_mount_joint", "type": "fixed"},
+    )
+    _add_origin(lidar_joint, "0.13 0 0.08")
+    ET.SubElement(lidar_joint, "parent", {"link": "cover_link"})
+    ET.SubElement(lidar_joint, "child", {"link": lidar_link_name})
+    root.append(lidar_joint)
+
+    lidar_gazebo = ET.SubElement(root, "gazebo", {"reference": lidar_link_name})
+    _add_text(lidar_gazebo, "gravity", "false")
+    sensor = ET.SubElement(
+        lidar_gazebo,
+        "sensor",
+        {"name": "livox_mid360", "type": "ray"},
+    )
+    _add_text(sensor, "always_on", "true")
+    _add_text(sensor, "update_rate", "10")
+    _add_text(sensor, "visualize", "true")
+    ray = ET.SubElement(sensor, "ray")
+    scan = ET.SubElement(ray, "scan")
+    horizontal = ET.SubElement(scan, "horizontal")
+    _add_text(horizontal, "samples", "360")
+    _add_text(horizontal, "resolution", "1")
+    _add_text(horizontal, "min_angle", "-3.14159265359")
+    _add_text(horizontal, "max_angle", "3.14159265359")
+    vertical = ET.SubElement(scan, "vertical")
+    _add_text(vertical, "samples", "40")
+    _add_text(vertical, "resolution", "1")
+    _add_text(vertical, "min_angle", "-0.12217304764")
+    _add_text(vertical, "max_angle", "0.90757121104")
+    range_element = ET.SubElement(ray, "range")
+    _add_text(range_element, "min", "0.1")
+    _add_text(range_element, "max", "40.0")
+    _add_text(range_element, "resolution", "0.01")
+
+    plugin = ET.SubElement(
+        sensor,
+        "plugin",
+        {
+            "name": "livox_mid360_controller",
+            "filename": "libgazebo_ros_ray_sensor.so",
+        },
+    )
+    ros = ET.SubElement(plugin, "ros")
+    _add_text(ros, "namespace", "/livox")
+    _add_text(ros, "remapping", "~/out:=lidar")
+    _add_text(plugin, "output_type", "sensor_msgs/PointCloud2")
+    _add_text(plugin, "frame_name", lidar_link_name)
+
+
 def _replace_ros2_control_with_single_gazebo_system(root: ET.Element) -> None:
     joints: list[ET.Element] = []
     for ros2_control in root.findall("ros2_control"):
@@ -332,6 +412,7 @@ def _openarm_robot_description(robot_preset: str, controllers_path: str) -> str:
 
     root = ET.fromstring(xml_text)
     _add_mobile_base(root)
+    _add_base_livox_mid360(root)
     _add_head_realsense(root)
     _replace_ros2_control_with_single_gazebo_system(root)
 
