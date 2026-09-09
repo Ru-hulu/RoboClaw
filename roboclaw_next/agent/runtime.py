@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from roboclaw_next.agent.budget import ContextBreakdown, TokenEstimator
+from roboclaw_next.agent.budget import TokenEstimator
 from roboclaw_next.agent.context_builder import ContextBuilder
 from roboclaw_next.agent.message import AgentMessage
 from roboclaw_next.agent.session import AgentSession
@@ -21,12 +21,12 @@ class AgentRuntime:
         provider: LLMProvider,
         tool_registry: ToolRegistry,
         context_builder: ContextBuilder,
-        estimator: TokenEstimator | None = None,
+        estimator: TokenEstimator,
     ) -> None:
         self.provider = provider
         self.tool_registry = tool_registry
         self.context_builder = context_builder
-        # 可选的输入用量估算器。传入即开始测量并自我校准。
+        # 与 ContextBuilder 共用输入用量估算器，每轮测量并自我校准。
         self.estimator = estimator
 
     async def run(
@@ -56,25 +56,20 @@ class AgentRuntime:
             )
             payload = [message.to_provider_dict() for message in context_messages]
 
-            breakdown: ContextBreakdown | None = None
-            estimated: int | None = None
-            if self.estimator is not None:
-                # 只遍历一次 payload：breakdown 给出构成，校正系数单独应用。
-                breakdown = self.estimator.breakdown(payload, tool_definitions)
-                estimated = self.estimator.apply_correction(breakdown.total)
+            # 只遍历一次 payload：breakdown 给出构成，校正系数单独应用。
+            breakdown = self.estimator.breakdown(payload, tool_definitions)
+            estimated = self.estimator.apply_correction(breakdown.total)
 
             response = await self.provider.chat_with_retry(
                 payload,
                 tools=tool_definitions,
             )
 
-            if self.estimator is not None and breakdown is not None:
-                # 用真实用量校准，无论是否开启 trace 都执行。校准要传未校正的
-                # 原始估算，传已校正的值会让系数停在偏低的不动点上。
-                self.estimator.observe(
-                    breakdown.total,
-                    response.usage.get("prompt_tokens"),
-                )
+            # 更新每一轮上下文长度的估计矫正系数
+            self.estimator.observe(
+                breakdown.total,
+                response.usage.get("prompt_tokens"),
+            )
 
             if trace:
                 print(f"[llm] finish_reason: {response.finish_reason}")
@@ -83,15 +78,14 @@ class AgentRuntime:
                     f"{[tool_call.name for tool_call in response.tool_calls]}"
                 )
                 print(_context_usage_line(response, session, context_messages))
-                if breakdown is not None and estimated is not None:
-                    print(f"[est] {breakdown.format_line()}")
-                    print(
-                        _estimate_accuracy_line(
-                            estimated,
-                            response.usage.get("prompt_tokens"),
-                            self.estimator,
-                        )
+                print(f"[est] {breakdown.format_line()}")
+                print(
+                    _estimate_accuracy_line(
+                        estimated,
+                        response.usage.get("prompt_tokens"),
+                        self.estimator,
                     )
+                )
             if not response.has_tool_calls:
                 session.append(AgentMessage(role="assistant", content=response.content))
                 return response.content

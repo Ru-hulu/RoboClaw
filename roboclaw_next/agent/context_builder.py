@@ -38,13 +38,12 @@ class ContextBuilder:
         self,
         provider: LLMProvider,
         keep_recent_turns: int = 2,
-        estimator: TokenEstimator | None = None,
-        budget: Budget | None = None,
+        *,
+        estimator: TokenEstimator,
+        budget: Budget,
     ) -> None:
         if keep_recent_turns < 1:
             raise ValueError("keep_recent_turns must be at least 1.")
-        if (estimator is None) != (budget is None):
-            raise ValueError("estimator and budget must be provided together.")
         self.provider = provider
         # keep_recent_turns 的角色是下界：保证最近这几轮永远保持原文，
         # 无论预算多紧。真正决定「要不要压」的是 budget。
@@ -80,13 +79,12 @@ class ContextBuilder:
 
         # 超出硬上限时明确失败，而不是照发让 Provider 返回 400 —— 后者会把
         # 报错文本当成模型回答写进历史，那一轮还会被判定为完整轮次、参与摘要。
-        if self.estimator is not None and self.budget is not None:
-            estimated = self._estimate(context, tool_definitions)
-            if estimated > self.budget.limit:
-                raise ContextOverflow(
-                    f"context is {estimated} tokens, limit is {self.budget.limit}; "
-                    "reduce the size of recent tool results or use a larger model"
-                )
+        estimated = self._estimate(context, tool_definitions)
+        if estimated > self.budget.limit:
+            raise ContextOverflow(
+                f"context is {estimated} tokens, limit is {self.budget.limit}; "
+                "reduce the size of recent tool results or use a larger model"
+            )
         return context
 
     def _assemble(self, session: AgentSession, system_end: int) -> list[AgentMessage]:
@@ -111,13 +109,7 @@ class ContextBuilder:
         system_end: int,
         tool_definitions: list[dict[str, Any]] | None,
     ) -> bool:
-        """判断是否会超出预算触发线。
-
-        没有配置预算时退回原有行为：只要存在可压缩的轮次就压缩。
-        """
-
-        if self.estimator is None or self.budget is None:
-            return True
+        """判断是否会超出预算触发线。"""
 
         candidate = self._assemble(session, system_end)
         return self._estimate(candidate, tool_definitions) > self.budget.trigger
@@ -127,7 +119,6 @@ class ContextBuilder:
         context: list[AgentMessage],
         tool_definitions: list[dict[str, Any]] | None,
     ) -> int:
-        assert self.estimator is not None
         return self.estimator.estimate(
             [message.to_provider_dict() for message in context],
             tool_definitions,
