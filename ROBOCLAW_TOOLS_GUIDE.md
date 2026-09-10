@@ -152,17 +152,12 @@ robot_runtime
 ```text
 创建 FastMCP("RoboClaw Tool Server")
     |
-    +-- MockLocalizationProcessManager
-    |
     +-- PathTrackingProcessManager
-    |      与定位工具共享同一个 localization manager
     |
     +-- Sam3WorkerProcessManager
     |
-    +-- 注册定位、路径跟踪、Hybrid A*、OpenArm 和 SAM3 工具
+    +-- 注册路径跟踪、Hybrid A*、OpenArm、SAM3 和仿真传感器桥工具
 ```
-
-共享定位 manager 很重要：路径跟踪在启动前可以确认由当前 MCP Server 管理的定位进程是否正在运行。
 
 ### 2.5 MCP 工具名和 Agent 工具名
 
@@ -171,7 +166,7 @@ MCP Server 暴露原始名称：
 ```text
 segment_image_with_sam3
 plan_hybrid_astar_path
-start_mock_localization
+start_path_tracking
 ```
 
 示例客户端把 MCP Server 命名为 `roboclaw_tools`。`MCPToolAdapter` 为避免多个 Server 工具重名，会生成 Agent 名称：
@@ -179,19 +174,15 @@ start_mock_localization
 ```text
 roboclaw_tools__segment_image_with_sam3
 roboclaw_tools__plan_hybrid_astar_path
-roboclaw_tools__start_mock_localization
+roboclaw_tools__start_path_tracking
 ```
 
 用户不需要记忆这些前缀，LLM 会根据自然语言和工具描述自动选择。
 
-## 3. 当前 13 个工具总览
+## 3. 当前工具总览
 
 | 分组 | 工具名 | 运行方式 | 主要结果或状态 |
 | --- | --- | --- | --- |
-| 模拟定位 | `start_mock_localization` | 启动 ROS 节点 | state、PID、退出码 |
-| 模拟定位 | `get_mock_localization_status` | 查询 manager | state、PID、退出码 |
-| 模拟定位 | `get_mock_localization` | 短生命周期 ROS Service Client | map-frame x/y/yaw |
-| 模拟定位 | `stop_mock_localization` | 停止 ROS 节点 | stopped 状态 |
 | 路径规划 | `plan_hybrid_astar_path` | 单次 C++ 子进程 | waypoint 和路径 JSON |
 | 路径跟踪 | `start_path_tracking` | 启动 MPC ROS 节点 | state、PID、路径文件 |
 | 路径跟踪 | `get_tracking_status` | 查询 manager | state、PID、退出码 |
@@ -208,83 +199,8 @@ roboclaw_tools__start_mock_localization
 | --- | --- | --- |
 | 纯函数 | OpenArm FK/IK | 计算快、无外部进程、无长期资源 |
 | 单次子进程 | Hybrid A* | 每次任务独立，运行后自然退出 |
-| 受管理常驻进程 | 定位、MPC | ROS 节点需要持续发布、订阅或控制 |
+| 受管理常驻进程 | MPC、仿真传感器桥 | ROS 节点需要持续发布、订阅或控制 |
 | 受管理常驻感知服务 | SAM3 | 模型加载昂贵，进程和 GPU 状态需要复用 |
-
-## 4. 模拟定位
-
-代码：
-
-- `roboclaw_next/tools/builtin/mock_localization/tool.py`
-- `roboclaw_next/tools/builtin/mock_localization/program.py`
-- `robot_runtime/localization/mock_localization/kinematic_node.py`
-
-### 4.1 `start_mock_localization`
-
-无输入。工具刷新状态后：
-
-1. 如果进程已经运行，直接返回当前状态，不重复启动。
-2. 尝试 source `/opt/ros/humble/setup.bash` 和仓库的 `install/setup.bash`。
-3. 启动：
-
-   ```text
-   python -m robot_runtime.localization.mock_localization.kinematic_node
-   ```
-
-返回：
-
-| 字段 | 含义 |
-| --- | --- |
-| `state` | `idle`、`running`、`stopped` 或 `failed` |
-| `pid` | 子进程 PID |
-| `return_code` | 进程退出码，运行时通常为空 |
-| `message` | 生命周期说明 |
-
-### 4.2 `get_mock_localization_status`
-
-无输入。只查询进程状态，不启动定位。
-
-### 4.3 `get_mock_localization`
-
-无输入。调用：
-
-```text
-Service: /mock_localization/get_pose
-Type:    roboclaw_interfaces/srv/GetMockLocalizationPose
-```
-
-返回示例：
-
-```json
-{
-  "success": true,
-  "frame_id": "map",
-  "x": 1.2,
-  "y": 0.8,
-  "yaw": 0.0,
-  "message": "Pose returned."
-}
-```
-
-位置单位是米，yaw 是弧度。该工具临时创建 ROS Client，结束后销毁。如果服务不可用，默认约 3 秒超时并返回 `success=false`。
-
-### 4.4 `stop_mock_localization`
-
-无输入。先 terminate，最多等待 10 秒，必要时 kill；重复调用安全。
-
-推荐流程：
-
-```text
-start_mock_localization
-    |
-get_mock_localization_status
-    |
-get_mock_localization
-    |
-执行规划或控制
-    |
-stop_mock_localization
-```
 
 ## 5. Hybrid A* 路径规划
 
@@ -305,7 +221,7 @@ stop_mock_localization
 | `goal_y` | 米 | `map` | 目标 Y |
 | `goal_yaw` | 弧度 | `map` | 目标航向 |
 
-如果用户没有给起点，应先调用 `get_mock_localization`，将 `x/y/yaw` 作为起点。
+调用方必须显式提供起点 `start_x/start_y/start_yaw`。
 
 每次调用启动一个独立规划器。默认查找：
 
@@ -351,7 +267,7 @@ robot_runtime/planning/hybrid_astar/maps/empty_80x80.png
 构建方式：
 
 ```bash
-colcon build --packages-up-to roboclaw_interfaces hybrid_astar
+colcon build --packages-up-to hybrid_astar
 ```
 
 或 standalone：
@@ -409,22 +325,16 @@ python -m robot_runtime.control.differential_drive_mpc.ros_node \
 ### 6.3 完整导航流程
 
 ```text
-1. start_mock_localization
-          |
-2. get_mock_localization
-          |  得到 start_x/start_y/start_yaw
-3. plan_hybrid_astar_path
-          |  生成 latest_hybrid_astar_path.json
-4. start_path_tracking
-          |  MPC 读取路径并开始控制
-5. get_tracking_status
+1. plan_hybrid_astar_path
+          |  使用显式 start pose 并生成 latest_hybrid_astar_path.json
+2. start_path_tracking
+          |  MPC 读取路径并等待 /robot_posture 反馈
+3. get_tracking_status
           |  按任务需要查询
-6. stop_path_tracking
-          |
-7. stop_mock_localization
+4. stop_path_tracking
 ```
 
-Agent 应检查每一步的结构化结果，不能在定位或规划失败后继续启动 MPC。
+Agent 应检查每一步的结构化结果，不能在规划失败后继续启动 MPC。
 
 ## 7. OpenArm 正逆运动学
 
@@ -1180,10 +1090,6 @@ SAM3 CPU-only 测试使用 fake backend，不导入 torch，不需要 GPU。真�
 ### LLM 看不到工具
 
 检查工具是否在 `mcp_server.py` 注册、MCP Server 是否启动、Client 是否执行 `initialize()`/`list_tools()`，以及 adapter 是否已加入 `ToolRegistry`。
-
-### 定位 running 但读不到 pose
-
-检查 ROS 2 Humble、`install/setup.bash`、`roboclaw_interfaces` 和 `/mock_localization/get_pose` 服务。
 
 ### Hybrid A* 找不到 executable
 

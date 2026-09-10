@@ -12,11 +12,6 @@ from robot_runtime.control.differential_drive_mpc.reference_path import (
     load_hybrid_astar_path_points,
 )
 
-from ..mock_localization.program import (
-    MockLocalizationProcessManager,
-    MockLocalizationState,
-)
-
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_PLAN_OUTPUT_PATH = (
@@ -51,18 +46,14 @@ class TrackingStatus:
 class PathTrackingProcessManager:
     """Start, inspect, and stop one MPC path tracking process."""
 
-    def __init__(
-        self,
-        localization_manager: MockLocalizationProcessManager,
-    ) -> None:
-        self._localization_manager = localization_manager
+    def __init__(self) -> None:
         self._process: asyncio.subprocess.Process | None = None
         self._state = TrackingState.IDLE
         self._message: str | None = None
         self._reference_path_file: str | None = None
 
     async def start(self, reference_path_file: str | None = None) -> TrackingStatus:
-        """Start MPC after confirming that localization is running."""
+        """Start MPC with a validated Hybrid A* reference path."""
 
         self._refresh_state()
         if self._state == TrackingState.RUNNING:
@@ -71,15 +62,6 @@ class PathTrackingProcessManager:
                     "MPC path tracking process is already running; stop it "
                     "before changing reference_path_file."
                 )
-            return self._status()
-
-        localization_status = await self._localization_manager.get_status()
-        if localization_status.state != MockLocalizationState.RUNNING:
-            self._state = TrackingState.FAILED
-            self._reference_path_file = None
-            self._message = (
-                "Cannot start path tracking because mock localization is not running."
-            )
             return self._status()
 
         try:

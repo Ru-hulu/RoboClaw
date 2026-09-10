@@ -43,9 +43,9 @@ def register_path_tracking_tools(
         title="Start Path Tracking",
         description=(
             "Start only the MPC path tracking process. This tool does not start "
-            "localization and does not run Hybrid A* planning. Prerequisites: "
-            "mock localization must already be running, and a successful Hybrid "
-            "A* JSON path must be available. The path is made of x/y waypoints "
+            "localization and does not run Hybrid A* planning. Prerequisite: "
+            "a successful Hybrid A* JSON path must be available. The path is "
+            "made of x/y waypoints "
             "and forward/reverse direction in the map frame; it is not a "
             "time-parameterized trajectory. The MPC node internally converts "
             "the path into a direction-preserving B-Spline reference pose "
@@ -53,9 +53,8 @@ def register_path_tracking_tools(
             "provided, MPC loads that Hybrid A* JSON path. If it is omitted and "
             "the latest Hybrid A* path JSON exists, MPC uses that file "
             "automatically. If neither is available, the call fails without "
-            "starting MPC. Before calling this tool, call "
-            "get_mock_localization_status; if localization is not running, "
-            "call start_mock_localization first."
+            "starting MPC. The MPC node waits for posture feedback on "
+            "the /robot_posture topic."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,
@@ -76,7 +75,7 @@ def register_path_tracking_tools(
             ),
         ] = None,
     ) -> TrackingStatusResult:
-        """Start MPC path tracking after checking localization."""
+        """Start MPC path tracking."""
 
         return _to_result(await manager.start(reference_path_file))
 

@@ -26,7 +26,7 @@ Run these commands from the repository root:
 source /opt/ros/humble/setup.bash
 rm -rf build install log
 rosdep install --from-paths robot_runtime --ignore-src -r -y
-colcon build --packages-up-to roboclaw_interfaces hybrid_astar
+colcon build --packages-up-to hybrid_astar
 source install/setup.bash
 ```
 

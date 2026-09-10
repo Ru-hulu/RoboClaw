@@ -6,7 +6,7 @@
 
 For each lidar frame, the node immediately calls `/gazebo/get_entity_state`
 (`gazebo_msgs/srv/GetEntityState`) for the current `openarm_v20` ground-truth
-pose and twist, then publishes one LCM payload on `ROBOCLAW_ODOM_SENSOR_FRAME`.
+pose and twist, then publishes the lidar frame on `/registered_scan#sensor_msgs.PointCloud2` and the existing merged payload on `ROBOCLAW_ODOM_SENSOR_FRAME`.
 The payload is:
 
 ```text
@@ -33,7 +33,7 @@ cover_link -> livox_mid360_link: xyz=0.13 0 0.08
 
 ## Dimos-compatible target protocol
 
-The current publisher keeps the existing `ROBOCLAW_ODOM_SENSOR_FRAME` payload.
+The current publisher keeps the existing `ROBOCLAW_ODOM_SENSOR_FRAME` payload and also publishes dimos-compatible point cloud frames.
 For the future FastLIO-compatible path, the target dimos channels are declared in
 `dimos_lcm_protocol.py`:
 

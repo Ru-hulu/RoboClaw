@@ -22,6 +22,11 @@ from robot_runtime.navigation.pub_odom_sensor.constants import (
     DEFAULT_MODEL_NAME,
     ODOM_FRAME_ID,
 )
+from robot_runtime.navigation.pub_odom_sensor.dimos_lcm_protocol import (
+    REGISTERED_SCAN_CHANNEL,
+    encode_dimos_pointcloud2_lcm,
+    ros_pointcloud2_to_dimos_lcm_message,
+)
 from robot_runtime.navigation.pub_odom_sensor.lcm_protocol import (
     ODOM_SENSOR_CHANNEL,
     encode_odom_sensor_frame,
@@ -99,6 +104,12 @@ class PubOdomSensorNode(Node):
             "odom": _odom_metadata(self._model_name, response),
             "lidar": _pointcloud_metadata(message),
         }
+        self._lcm.publish(
+            REGISTERED_SCAN_CHANNEL,
+            encode_dimos_pointcloud2_lcm(
+                ros_pointcloud2_to_dimos_lcm_message(message),
+            ),
+        )
         self._lcm.publish(
             self._lcm_channel,
             encode_odom_sensor_frame(metadata, bytes(message.data)),

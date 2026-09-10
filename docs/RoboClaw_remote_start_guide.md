@@ -47,8 +47,6 @@ docker run --rm -it --init \
 
 ```text
 [mcp] registered tools:
-- roboclaw_tools__start_mock_localization
-- roboclaw_tools__get_mock_localization
 - roboclaw_tools__plan_hybrid_astar_path
 - roboclaw_tools__start_path_tracking
 

@@ -52,33 +52,21 @@ Hybrid A* 输出的 JSON path 提供二维平面点 `x`、`y` 和 `direction`。
 未提供该参数时，节点会直接退出。节点订阅 `/robot_posture`，
 并将 MPC 得到的左右轮速度转换为 `geometry_msgs/msg/Twist` 发布到 `/cmd_vel`。
 
-`robot_runtime/localization/mock_localization/kinematic_node.py` 作为临时定位模块，
-订阅 `/cmd_vel`，使用
-`propagate()` 更新机器人位姿，再将 `geometry_msgs/msg/PoseStamped` 发布到
-`/robot_posture`。两个节点均以 10 Hz 运行。
-
-先启动运动学状态节点：
-
-```bash
-python3 -m robot_runtime.localization.mock_localization.kinematic_node
-```
-
-再启动 MPC 节点，并显式传入 Hybrid A* path 文件：
+启动 MPC 节点时需要显式传入 Hybrid A* path 文件：
 
 ```bash
 python3 -m robot_runtime.control.differential_drive_mpc.ros_node \
   --ros-args -p reference_path_file:=runtime_data/hybrid_astar/latest_hybrid_astar_path.json
 ```
 
-其他终端可以观察两个节点之间的消息：
+定位/仿真桥节点需要另外提供 `/robot_posture`。其他终端可以观察 MPC 输出和姿态输入：
 
 ```bash
 ros2 topic echo /cmd_vel geometry_msgs/msg/Twist
 ros2 topic echo /robot_posture geometry_msgs/msg/PoseStamped
 ```
 
-MPC 节点执行 60 个控制周期后发布零速度并自动退出；运动学节点继续发布静止位姿，
-直到用户停止进程。
+MPC 节点执行 60 个控制周期后发布零速度并自动退出。
 
 ## RViz 调试轨迹
 
@@ -86,13 +74,11 @@ MPC 节点执行 60 个控制周期后发布零速度并自动退出；运动学
 节点额外发布：
 
 - `/reference_path`：MPC 使用的参考轨迹。
-- `/robot_path`：Mock Localization 累积的实际运动轨迹。
 
-在 RViz 中将 Fixed Frame 设置为 `map`，添加两个 `Path` Display 并分别选择上述 Topic。
+在 RViz 中将 Fixed Frame 设置为 `map`，添加 `Path` Display 并选择上述 Topic。
 不再需要调试显示时，可以删除该调试模块及两个节点中的发布器调用。
 
 ## 当前边界
 
 当前实现采用运动学模型，只负责跟踪给定参考轨迹；不处理障碍物、碰撞、轮胎打滑、
-电机动力学或路径规划。`/robot_posture` 目前由 `mock_localization` 提供，后续可以
-替换为真实 SLAM 或定位节点。
+电机动力学或路径规划。`/robot_posture` 需要由真实 SLAM、Gazebo 真值桥或其他定位节点提供。

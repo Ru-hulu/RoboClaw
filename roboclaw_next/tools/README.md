@@ -21,7 +21,6 @@ AgentTool
 
 Current built-in capabilities:
 
-- `mock_localization/`: simulated localization process and lifecycle Tools.
 - `path_tracking/`: MPC path tracking process management Tools.
 - `hybrid_astar_planner/`: one-shot runner and direct path-planning Tool backed by
   the standalone C++ Hybrid A* executable.

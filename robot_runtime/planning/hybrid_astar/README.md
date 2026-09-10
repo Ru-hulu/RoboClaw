@@ -70,7 +70,7 @@ For the normal ROS 2 Humble host workflow, build from the repository root with:
 
 ```bash
 source /opt/ros/humble/setup.bash
-colcon build --packages-up-to roboclaw_interfaces hybrid_astar
+colcon build --packages-up-to hybrid_astar
 source install/setup.bash
 ```
 

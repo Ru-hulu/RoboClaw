@@ -166,7 +166,7 @@ class HybridAStarPlannerRunner:
         raise RuntimeError(
             "Hybrid A* executable does not exist. Searched: "
             f"{searched}. Build the ROS 2 workspace with "
-            "`colcon build --packages-up-to roboclaw_interfaces hybrid_astar`, "
+            "`colcon build --packages-up-to hybrid_astar`, "
             "or build the standalone planner with "
             "`cmake -S robot_runtime/planning/hybrid_astar "
             "-B robot_runtime/planning/hybrid_astar/build` followed by "
