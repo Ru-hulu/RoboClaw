@@ -30,6 +30,11 @@ Current built-in capabilities:
   `start_gazebo_realsense_camera`, `get_gazebo_realsense_camera_status`, and
   `stop_gazebo_realsense_camera`. The listener relays images to LCM channels
   `ROBOCLAW_REALSENSE_COLOR_IMAGE` and `ROBOCLAW_REALSENSE_DEPTH_IMAGE`.
+- `pub_odom_sensor/`: Gazebo odometry/lidar bridge lifecycle Tools:
+  `start_pub_odom_sensor`, `get_pub_odom_sensor_status`, and
+  `stop_pub_odom_sensor`. The ROS node listens to `/livox/lidar`, calls
+  `/gazebo/get_entity_state` for each lidar frame, and publishes merged frames
+  to `ROBOCLAW_ODOM_SENSOR_FRAME`.
 - `sam3_segmentation/`: SAM3 perception service lifecycle Tools
   (`start_sam3_perception`, `get_sam3_perception_status`,
   `stop_sam3_perception`). SAM3 inference RPC clients belong to separate
