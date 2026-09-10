@@ -4,13 +4,11 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from typing_extensions import Self
-
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
-from .program import get_ee_pose, plan_to_xyz
+from .program import execute_plan, get_ee_pose, plan_to_xyz
 
 
 class EePoseResult(BaseModel):
@@ -51,6 +49,10 @@ class ReachPlanResult(BaseModel):
     points: list[TrajectoryPointResult] = Field(
         description="Trajectory samples, starting at the current configuration.",
     )
+    schema_version: int = Field(description="Stored plan schema version.")
+    plan_id: str = Field(description="Unique immutable plan identifier.")
+    plan_file: str = Field(description="Absolute path of the stored full trajectory.")
+    created_at: str = Field(description="UTC timestamp at which the plan was stored.")
 
 
 class ReachPlanSummary(BaseModel):
@@ -74,9 +76,12 @@ class ReachPlanSummary(BaseModel):
             "itself is not returned."
         ),
     )
+    plan_id: str = Field(description="Unique identifier accepted by execute_openarm_reach.")
+    plan_file: str = Field(description="Absolute path of the stored full trajectory.")
+    created_at: str = Field(description="UTC timestamp at which the plan was stored.")
 
     @classmethod
-    def from_plan(cls, plan: ReachPlanResult) -> Self:
+    def from_plan(cls, plan: ReachPlanResult) -> ReachPlanSummary:
         """从完整规划结果投影出面向模型的摘要。"""
 
         return cls(
@@ -89,7 +94,31 @@ class ReachPlanSummary(BaseModel):
             target_pose=plan.target_pose,
             message=plan.message,
             point_count=len(plan.points),
+            plan_id=plan.plan_id,
+            plan_file=plan.plan_file,
+            created_at=plan.created_at,
         )
+
+
+class OpenArmExecutionResult(BaseModel):
+    """Result of sending one stored plan to FollowJointTrajectory."""
+
+    success: bool = Field(description="Whether the trajectory action reported success.")
+    sent: bool = Field(description="Whether a non-empty action goal was sent.")
+    plan_id: str = Field(description="The immutable plan that was executed.")
+    arm: Literal["right", "left"] = Field(description="The commanded OpenArm chain.")
+    action_name: str = Field(description="ROS 2 FollowJointTrajectory action name.")
+    point_count: int = Field(description="Number of position commands sent.")
+    duration_sec: float = Field(description="Retimed trajectory duration in seconds.")
+    speed_scale: float = Field(description="Fraction of documented joint velocity limits.")
+    start_error_rad: float = Field(description="Largest start-joint mismatch in radians.")
+    status: int = Field(description="ROS action terminal status code.")
+    error_code: int = Field(description="FollowJointTrajectory result error code.")
+    error_string: str = Field(description="Controller-provided result detail.")
+    collision_checked: bool = Field(
+        description="Always false in this minimal executor; no collision checking is done."
+    )
+    message: str = Field(description="Short execution summary.")
 
 
 def register_openarm_reach_tools(mcp: FastMCP) -> None:
@@ -130,14 +159,15 @@ def register_openarm_reach_tools(mcp: FastMCP) -> None:
             "joint angles in a continuously updated /joint_states cache; do not "
             "supply them. Orientation is kept from the current end-effector pose. "
             "This is an IK calculation only; it does not command motors. Provide "
-            "x, y, z in metres. The joint trajectory itself will not be returned. Use ok and "
-            "final_error_m to judge whether the target is reachable, and "
-            "point_count to confirm a trajectory was produced."
+            "x, y, z in metres. The full joint trajectory is stored under a "
+            "unique plan_id but is not returned to the model. Use ok and "
+            "final_error_m to judge whether the target is reachable, then pass "
+            "plan_id to execute_openarm_reach."
         ),
         annotations=ToolAnnotations(
-            readOnlyHint=True,
+            readOnlyHint=False,
             destructiveHint=False,
-            idempotentHint=True,
+            idempotentHint=False,
             openWorldHint=False,
         ),
     )
@@ -156,11 +186,48 @@ def register_openarm_reach_tools(mcp: FastMCP) -> None:
         电机，拿到逐点关节角也用不上。
         """
 
-        # TODO(openarm): 决定完整轨迹的去向。目前 plan 投影完就丢弃，因为仓库里
-        # 还没有任何 executor 消费它 —— 全仓搜索 ReachPlan 只有 planner 自己。
-        # 可选方案：
-        #   1. 落盘。照 hybrid A* 的做法写 runtime_data/openarm/latest_reach_plan.json，
-        #      并在 ReachPlanSummary 里加一个 plan_file 字段指给下游。
-        #   2. 直接交给执行器。经 LCM/ROS 送出去，不落盘，规划与执行同一次调用完成。
         plan = ReachPlanResult.model_validate(await plan_to_xyz(arm, x, y, z))
         return ReachPlanSummary.from_plan(plan)
+
+    @mcp.tool(
+        name="execute_openarm_reach",
+        title="Execute OpenArm Reach",
+        description=(
+            "Send one previously generated OpenArm reach plan to the ROS 2 "
+            "FollowJointTrajectory controller. Provide the plan_id returned by "
+            "plan_openarm_reach. Before sending, the tool reloads the immutable "
+            "full trajectory, requires a converged plan, reads fresh joint state, "
+            "and rejects the plan if the arm moved more than 0.05 rad from its "
+            "planned start. Points are retimed against the documented joint "
+            "velocity limits. This first executor does NOT perform self-collision "
+            "or environment-collision checking and does not command the gripper."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+    )
+    async def execute_openarm_reach(
+        plan_id: Annotated[
+            str,
+            Field(description="Plan identifier returned by plan_openarm_reach."),
+        ],
+        speed_scale: Annotated[
+            float,
+            Field(
+                gt=0.0,
+                le=1.0,
+                description=(
+                    "Fraction of documented joint velocity limits; 0.2 is the "
+                    "conservative default."
+                ),
+            ),
+        ] = 0.2,
+    ) -> OpenArmExecutionResult:
+        """Execute a stored plan through FollowJointTrajectory."""
+
+        return OpenArmExecutionResult.model_validate(
+            await execute_plan(plan_id, speed_scale=speed_scale)
+        )
