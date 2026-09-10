@@ -9,6 +9,7 @@ frozen and is not part of the seven-DoF arm.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 
@@ -43,6 +44,47 @@ class ArmKinematics:
     @property
     def q8_length(self) -> int:
         return self.n_joints + 1
+
+    @property
+    def max_reach(self) -> float:
+        """Upper bound on EE distance from the arm base, in metres.
+        """
+
+        return sum(math.dist((0.0, 0.0, 0.0), hinge.origin) for hinge in self.hinges)
+
+    @property
+    def joint_names(self) -> tuple[str, ...]:
+        """ROS joint names, in the same order as ``hinges``.
+
+        The description names hinge ``i`` as ``openarm_<side>_joint<i+1>``.
+        Stating it here keeps the assumption next to the order it depends on,
+        instead of restating it in every caller that reads ``/joint_states``.
+        """
+
+        return tuple(
+            f"openarm_{self.side}_joint{index + 1}" for index in range(self.n_joints)
+        )
+
+    @property
+    def gripper_joint_name(self) -> str:
+        """ROS joint name of the finger that fills the trailing q8 slot."""
+
+        return f"openarm_{self.side}_finger_joint1"
+
+    def order_joint_positions(self, by_name: Mapping[str, float]) -> tuple[float, ...]:
+        """Reorder a name->position mapping into hinge order.
+
+        ``/joint_states`` carries both arms and both fingers in a publisher-chosen
+        order, so values are selected by name. A missing joint is an error, never
+        a zero.
+        """
+
+        missing = [name for name in self.joint_names if name not in by_name]
+        if missing:
+            raise ValueError(
+                f"joint state is missing {self.side} arm joints: {missing}"
+            )
+        return tuple(float(by_name[name]) for name in self.joint_names)
 
 
 _RIGHT = ArmKinematics(

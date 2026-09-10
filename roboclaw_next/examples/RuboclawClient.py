@@ -102,8 +102,22 @@ async def main() -> None:
                     content=(
                         "You are a tool-using assistant. Use the provided tools "
                         "when appropriate, and answer the user in Chinese. "
-                        "When the requested operation has succeeded, give a final "
-                        "answer instead of repeating status checks."
+                        "After the requested operation has succeeded, give a final "
+                        "answer instead of repeating status checks. "
+                        "When choosing a target you are free to adjust x, y and z "
+                        "together - do not anchor on the current x/y and change only "
+                        "one axis, because a single direction is often limited while "
+                        "varying the other axes (e.g. moving forward or inward) unlocks "
+                        "much more range. "
+                        "For extreme goals ('as much/high/far as possible', "
+                        "尽可能/最大/最高/最远), do NOT stop at the first feasible "
+                        "plan: keep proposing more aggressive candidates (you may "
+                        "issue several plan_openarm_reach calls in one turn) and use "
+                        "failure_reason as guidance - max_steps is still converging "
+                        "(maybe reachable), while out_of_reach / joint_limit_blocked "
+                        "mark a blocked direction. Compare the feasible plans, then "
+                        "execute only the single best plan_id. Do not re-submit an "
+                        "identical xyz (the planner is deterministic)."
                     ),
                 ),
             ]
@@ -135,7 +149,7 @@ async def main() -> None:
                 continue
 
             session.append(AgentMessage(role="user", content=user_input))
-            answer = await agent_runtime.run(session, trace=True)
+            answer = await agent_runtime.run(session, max_iterations=15, trace=True)
             if answer is None:
                 print("\nAssistant:")
                 print(
