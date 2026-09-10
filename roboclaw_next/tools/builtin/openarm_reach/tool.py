@@ -39,11 +39,28 @@ class ReachPlanResult(BaseModel):
     """Joint trajectory produced by one atomic OpenArm reach."""
 
     ok: bool = Field(description="True when the final position error is within tolerance.")
-    failure_reason: str = Field(description="converged or max_steps.")
+    failure_reason: str = Field(
+        description=(
+            "Why the solve stopped: converged, max_steps (still improving when the step budget ran out), singularity_locked (the arm sits at a singularity and could not move), joint_limit_blocked (a joint hit its stop), or no_progress (the solver stalled, including after retries from other starting postures)."
+        ),
+    )
     frame: str = Field(description="Pose frame. Always arm_origin.")
     arm: Literal["right", "left"] = Field(description="Which OpenArm chain was planned.")
     dt: float = Field(description="Outer-loop sample period in seconds.")
+    initial_error_m: float = Field(
+        description=(
+            "Euclidean position error before the first step. Equal to "
+            "final_error_m means the solver never moved the arm."
+        ),
+    )
     final_error_m: float = Field(description="Final Euclidean position error in metres.")
+    escape_blend: float = Field(
+        description=(
+            "0.0 when the plan started solving directly. Otherwise the "
+            "fraction toward the home posture that the trajectory detours "
+            "through to leave a blocked start configuration."
+        ),
+    )
     target_pose: list[float] = Field(description="Assembled target pose[7] in arm_origin.")
     message: str = Field(description="Short summary for the model, including millimetre error.")
     points: list[TrajectoryPointResult] = Field(
@@ -63,11 +80,28 @@ class ReachPlanSummary(BaseModel):
     """
 
     ok: bool = Field(description="True when the final position error is within tolerance.")
-    failure_reason: str = Field(description="converged or max_steps.")
+    failure_reason: str = Field(
+        description=(
+            "Why the solve stopped: converged, max_steps (still improving when the step budget ran out), singularity_locked (the arm sits at a singularity and could not move), joint_limit_blocked (a joint hit its stop), or no_progress (the solver stalled, including after retries from other starting postures)."
+        ),
+    )
     frame: str = Field(description="Pose frame. Always arm_origin.")
     arm: Literal["right", "left"] = Field(description="Which OpenArm chain was planned.")
     dt: float = Field(description="Outer-loop sample period in seconds.")
+    initial_error_m: float = Field(
+        description=(
+            "Euclidean position error before the first step. Equal to "
+            "final_error_m means the solver never moved the arm."
+        ),
+    )
     final_error_m: float = Field(description="Final Euclidean position error in metres.")
+    escape_blend: float = Field(
+        description=(
+            "0.0 when the plan started solving directly. Otherwise the "
+            "fraction toward the home posture that the trajectory detours "
+            "through to leave a blocked start configuration."
+        ),
+    )
     target_pose: list[float] = Field(description="Assembled target pose[7] in arm_origin.")
     message: str = Field(description="Short summary for the model, including millimetre error.")
     point_count: int = Field(
@@ -90,7 +124,9 @@ class ReachPlanSummary(BaseModel):
             frame=plan.frame,
             arm=plan.arm,
             dt=plan.dt,
+            initial_error_m=plan.initial_error_m,
             final_error_m=plan.final_error_m,
+            escape_blend=plan.escape_blend,
             target_pose=plan.target_pose,
             message=plan.message,
             point_count=len(plan.points),
@@ -161,8 +197,10 @@ def register_openarm_reach_tools(mcp: FastMCP) -> None:
             "This is an IK calculation only; it does not command motors. Provide "
             "x, y, z in metres. The full joint trajectory is stored under a "
             "unique plan_id but is not returned to the model. Use ok and "
-            "final_error_m to judge whether the target is reachable, then pass "
-            "plan_id to execute_openarm_reach."
+            "final_error_m to judge whether the target is reachable, and "
+            "failure_reason to tell an unreachable target apart from a "
+            "blocked arm posture; do not infer a reachability limit from a "
+            "few failed attempts. Then pass plan_id to execute_openarm_reach."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,

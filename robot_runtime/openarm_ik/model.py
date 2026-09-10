@@ -46,6 +46,13 @@ class ArmKinematics:
         return self.n_joints + 1
 
     @property
+    def max_reach(self) -> float:
+        """Upper bound on EE distance from the arm base, in metres.
+        """
+
+        return sum(math.dist((0.0, 0.0, 0.0), hinge.origin) for hinge in self.hinges)
+
+    @property
     def joint_names(self) -> tuple[str, ...]:
         """ROS joint names, in the same order as ``hinges``.
 

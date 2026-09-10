@@ -18,15 +18,20 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Awaitable, Callable
 
 from robot_runtime.openarm_control import (
-    TrajectoryExecution,
     read_arm_joint_state,
     retime_joint_positions,
     send_joint_trajectory,
 )
 from robot_runtime.openarm_ik import ORIGIN_FRAME, ReachPlan, fk, plan_reach
+from robot_runtime.openarm_ik.model import arm as arm_model
+from robot_runtime.openarm_ik.planner import (
+    JOINT_LIMIT_BLOCKED,
+    NO_PROGRESS,
+    OUT_OF_REACH,
+    SINGULARITY_LOCKED,
+)
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
@@ -62,7 +67,8 @@ async def plan_to_xyz(
 ) -> dict[str, object]:
     """Plan a reach from the current joints and persist its full trajectory."""
 
-    payload = plan_from_joints(arm, await read_joints(arm), x, y, z)
+    joints = await read_joints(arm)
+    payload = await asyncio.to_thread(plan_from_joints, arm, joints, x, y, z)
     return store_plan(payload)
 
 
@@ -71,8 +77,6 @@ async def execute_plan(
     *,
     speed_scale: float = 0.2,
     plan_root: Path = DEFAULT_PLAN_ROOT,
-    joint_reader: Callable[..., Awaitable[list[float]]] | None = None,
-    trajectory_sender: Callable[..., TrajectoryExecution] | None = None,
 ) -> dict[str, object]:
     """Load, validate, retime, and send one stored reach trajectory."""
 
@@ -85,14 +89,9 @@ async def execute_plan(
         )
 
     side = payload.get("arm")
-    if side not in {"right", "left"}:
-        raise ValueError(f"Stored OpenArm plan has an invalid arm: {side!r}")
     positions = _plan_positions(payload)
 
-    reader = joint_reader or read_joints
-    current = await reader(side, max_age_sec=EXECUTION_STATE_MAX_AGE_SEC)
-    if len(current) != 7 or not all(math.isfinite(value) for value in current):
-        raise RuntimeError("Current OpenArm joint state is not a finite 7-joint vector.")
+    current = await read_joints(side, max_age_sec=EXECUTION_STATE_MAX_AGE_SEC)
     start_error = max(
         abs(actual - planned) for actual, planned in zip(current, positions[0])
     )
@@ -104,8 +103,7 @@ async def execute_plan(
         )
 
     timed_points = retime_joint_positions(positions, speed_scale=speed_scale)
-    sender = trajectory_sender or send_joint_trajectory
-    execution = await asyncio.to_thread(sender, side, timed_points)
+    execution = await asyncio.to_thread(send_joint_trajectory, side, timed_points)
     message = (
         f"OpenArm trajectory completed in {execution.duration_sec:.2f} s."
         if execution.success
@@ -164,27 +162,17 @@ def plan_from_joints(
 def serialize_plan(plan: ReachPlan) -> dict[str, object]:
     """Convert a ReachPlan into a structured tool payload."""
 
-    step_count = max(0, len(plan.points) - 1)
-    error_mm = plan.final_error_m * 1000.0
-    if plan.ok:
-        message = (
-            f"Reached the target in the {plan.frame} frame with "
-            f"{error_mm:.1f} mm error after {step_count} IK steps."
-        )
-    else:
-        message = (
-            f"Stopped after {step_count} IK steps in the {plan.frame} frame; "
-            f"final position error is {error_mm:.1f} mm."
-        )
     return {
         "ok": plan.ok,
         "failure_reason": plan.failure_reason,
         "frame": plan.frame,
         "arm": plan.arm,
         "dt": plan.dt,
+        "initial_error_m": plan.initial_error_m,
         "final_error_m": plan.final_error_m,
+        "escape_blend": plan.escape_blend,
         "target_pose": list(plan.target_pose),
-        "message": message,
+        "message": describe_plan(plan),
         "points": [
             {
                 "t": point.t,
@@ -194,6 +182,68 @@ def serialize_plan(plan: ReachPlan) -> dict[str, object]:
             for point in plan.points
         ],
     }
+
+
+def describe_plan(plan: ReachPlan) -> str:
+    """Explain the outcome in the terms the model actually needs.
+
+    A bare "max_steps" made every failure look alike, so the model invented its
+    own explanation. Each reason below says what blocked the solve and whether
+    the error moved at all.
+    """
+
+    steps = max(0, len(plan.points) - 1)
+    start_mm = plan.initial_error_m * 1000.0
+    final_mm = plan.final_error_m * 1000.0
+    frame = plan.frame
+
+    if plan.ok:
+        message = (
+            f"Reached the target in the {frame} frame with {final_mm:.1f} mm "
+            f"error after {steps} steps."
+        )
+        if plan.escape_blend > 0.0:
+            message += (
+                f" The start configuration was blocked, so the trajectory first "
+                f"moves {plan.escape_blend * 100:.0f}% of the way toward the home "
+                "posture and reaches the target from there."
+            )
+        return message
+
+    if plan.failure_reason == OUT_OF_REACH:
+        kinematics = arm_model(plan.arm)
+        distance = math.dist(plan.target_pose[:3], kinematics.base_from_origin)
+        return (
+            f"The target is {distance:.3f} m from the {plan.arm} arm base, beyond "
+            f"its {kinematics.max_reach:.3f} m maximum link length, so no posture "
+            "can reach it and no IK was attempted. Pick a closer target, or move "
+            "the mobile base first."
+        )
+    if plan.failure_reason == SINGULARITY_LOCKED:
+        return (
+            f"The arm is at a kinematic singularity, so the solver could not move "
+            f"it: position error stayed at {final_mm:.1f} mm. Retrying the same "
+            "target will not help. Move the arm to a different posture first, for "
+            "example by reaching a nearby point that bends the elbow."
+        )
+    if plan.failure_reason == JOINT_LIMIT_BLOCKED:
+        return (
+            f"A joint reached its travel limit with {final_mm:.1f} mm still to go "
+            f"(from {start_mm:.1f} mm). The target is outside this arm's range in "
+            "the current orientation."
+        )
+    if plan.failure_reason == NO_PROGRESS:
+        return (
+            f"The solver stopped making progress at {final_mm:.1f} mm error "
+            f"(from {start_mm:.1f} mm) after {steps} steps, including retries from "
+            "other starting postures. Treat this target as unreachable while the "
+            "end-effector orientation is held fixed."
+        )
+    return (
+        f"The step budget ran out while still converging: {final_mm:.1f} mm error "
+        f"remains (from {start_mm:.1f} mm) after {steps} steps. A nearer target "
+        "should succeed."
+    )
 
 
 def store_plan(

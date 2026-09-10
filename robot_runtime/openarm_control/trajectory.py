@@ -238,6 +238,6 @@ def _validate_timed_points(
         timestamp = float(point.time_from_start)
         if not math.isfinite(timestamp) or timestamp <= previous_time:
             raise ValueError("trajectory times must be finite and strictly increasing")
-        normalized.append(TimedJointPoint(timestamp, _validate_positions(point.positions)))
+        normalized.append(TimedJointPoint(timestamp, tuple(point.positions)))
         previous_time = timestamp
     return tuple(normalized)
