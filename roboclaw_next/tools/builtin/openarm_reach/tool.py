@@ -195,12 +195,15 @@ def register_openarm_reach_tools(mcp: FastMCP) -> None:
             "joint angles in a continuously updated /joint_states cache; do not "
             "supply them. Orientation is kept from the current end-effector pose. "
             "This is an IK calculation only; it does not command motors. Provide "
-            "x, y, z in metres. The full joint trajectory is stored under a "
-            "unique plan_id but is not returned to the model. Use ok and "
+            "x, y, z in metres (x forward, y left, z up/height). A max_steps "
+            "failure means the solver was still converging, so the target is not "
+            "proven out of range; re-planning or adjusting the target (for example "
+            "its height z) may succeed. The full joint trajectory is stored under "
+            "a unique plan_id but is not returned to the model. Use ok and "
             "final_error_m to judge whether the target is reachable, and "
-            "failure_reason to tell an unreachable target apart from a "
-            "blocked arm posture; do not infer a reachability limit from a "
-            "few failed attempts. Then pass plan_id to execute_openarm_reach."
+            "failure_reason to tell an unreachable target apart from a blocked arm "
+            "posture; do not infer a reachability limit from a few failed attempts. "
+            "Then pass plan_id to execute_openarm_reach."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,
@@ -214,9 +217,9 @@ def register_openarm_reach_tools(mcp: FastMCP) -> None:
             Literal["right", "left"],
             Field(description="Which arm to plan."),
         ],
-        x: Annotated[float, Field(description="Target x in the arm_origin frame, metres.")],
-        y: Annotated[float, Field(description="Target y in the arm_origin frame, metres.")],
-        z: Annotated[float, Field(description="Target z in the arm_origin frame, metres.")],
+        x: Annotated[float, Field(description="Target x (forward) in arm_origin, metres.")],
+        y: Annotated[float, Field(description="Target y (left) in arm_origin, metres.")],
+        z: Annotated[float, Field(description="Target z (up/height) in arm_origin, metres.")],
     ) -> ReachPlanSummary:
         """Plan a reach and return a summary of the joint trajectory.
 

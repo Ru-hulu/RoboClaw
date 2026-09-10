@@ -241,8 +241,9 @@ def describe_plan(plan: ReachPlan) -> str:
         )
     return (
         f"The step budget ran out while still converging: {final_mm:.1f} mm error "
-        f"remains (from {start_mm:.1f} mm) after {steps} steps. A nearer target "
-        "should succeed."
+        f"remains (from {start_mm:.1f} mm) after {steps} steps. The solver was still "
+        "reducing the error, so the target is not proven out of range; re-planning "
+        "or adjusting the target (for example its height z) may succeed."
     )
 
 
